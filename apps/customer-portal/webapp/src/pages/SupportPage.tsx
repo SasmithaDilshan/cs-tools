@@ -38,7 +38,6 @@ import {
 import {
   getIncidentAndQueryIds,
 } from "@utils/support";
-import { formatDateTime } from "@utils/support";
 import type { ChatHistoryItem } from "@models/responses";
 
 /**
@@ -109,7 +108,7 @@ export default function SupportPage(): JSX.Element {
   ).map((c) => ({
     chatId: c.id,
     title: c.initialMessage || c.number,
-    startedTime: formatDateTime(c.createdOn, "short") ?? "--",
+    startedTime: c.createdOn,
     messages: c.messageCount,
     kbArticles: 0,
     status: c.state?.label ?? "Open",

@@ -38,9 +38,7 @@ import { ArrowLeft } from "@wso2/oxygen-ui-icons-react";
 import { useGetProjectCasesStats } from "@api/useGetProjectCasesStats";
 import useGetCasesFilters from "@api/useGetCasesFilters";
 import useGetProjectCases from "@api/useGetProjectCases";
-import {
-  getIncidentAndQueryIds,
-} from "@utils/support";
+import { getIncidentAndQueryIds } from "@utils/support";
 import { CaseType } from "@constants/supportConstants";
 import type { AllCasesFilterValues } from "@models/responses";
 import AllCasesStatCards from "@components/support/all-cases/AllCasesStatCards";
