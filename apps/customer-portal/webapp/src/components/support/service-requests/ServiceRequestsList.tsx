@@ -23,7 +23,12 @@ import {
   alpha,
   useTheme,
 } from "@wso2/oxygen-ui";
-import { Calendar, FileText, User } from "@wso2/oxygen-ui-icons-react";
+import {
+  Calendar,
+  Layers,
+  Package,
+  Users,
+} from "@wso2/oxygen-ui-icons-react";
 import type { JSX } from "react";
 import type { CaseListItem } from "@models/responses";
 import {
@@ -77,6 +82,9 @@ export default function ServiceRequestsList({
         const StatusIcon = getStatusIcon(sr.status?.label);
         const colorPath = getStatusColor(sr.status?.label);
         const resolvedColor = resolveColorFromTheme(colorPath, theme);
+        const assignedLabel = getAssignedEngineerLabel(sr.assignedEngineer);
+        const environmentLabel = sr.deployment?.label;
+        const productLabel = sr.deployedProduct?.label;
 
         return (
           <Form.CardButton
@@ -189,7 +197,7 @@ export default function ServiceRequestsList({
             <Form.CardActions
               sx={{
                 p: 0,
-                justifyContent: "flex-start",
+                justifyContent: "space-between",
                 flexWrap: "wrap",
                 gap: 2,
               }}
@@ -198,7 +206,7 @@ export default function ServiceRequestsList({
                 sx={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 2,
+                  gap: 3,
                   flexWrap: "wrap",
                 }}
               >
@@ -216,34 +224,10 @@ export default function ServiceRequestsList({
                     color="text.secondary"
                     sx={{ lineHeight: 1 }}
                   >
-                    Created {formatDateTime(sr.createdOn) || "--"}
+                    {formatDateTime(sr.createdOn) || "--"}
                   </Typography>
                 </Box>
-                {(() => {
-                  const assignedLabel = getAssignedEngineerLabel(
-                    sr.assignedEngineer,
-                  );
-                  return assignedLabel ? (
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 0.5,
-                        flexShrink: 0,
-                      }}
-                    >
-                      <User size={14} />
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ lineHeight: 1 }}
-                      >
-                        Assigned to {assignedLabel}
-                      </Typography>
-                    </Box>
-                  ) : null;
-                })()}
-                {sr.deployment?.label && (
+                {environmentLabel && (
                   <Box
                     sx={{
                       display: "flex",
@@ -252,13 +236,51 @@ export default function ServiceRequestsList({
                       flexShrink: 0,
                     }}
                   >
-                    <FileText size={14} />
+                    <Layers size={14} />
                     <Typography
                       variant="caption"
                       color="text.secondary"
                       sx={{ lineHeight: 1 }}
                     >
-                      {sr.deployment.label}
+                      {environmentLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {productLabel && (
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Package size={14} />
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ lineHeight: 1 }}
+                    >
+                      {productLabel}
+                    </Typography>
+                  </Box>
+                )}
+                {assignedLabel && (
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Users size={14} />
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ lineHeight: 1 }}
+                    >
+                      {assignedLabel}
                     </Typography>
                   </Box>
                 )}
