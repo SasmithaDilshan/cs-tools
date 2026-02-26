@@ -20,7 +20,6 @@ import { Box, Grid, Stack } from "@wso2/oxygen-ui";
 import { FileText, MessageSquare } from "@wso2/oxygen-ui-icons-react";
 import { useAsgardeo } from "@asgardeo/react";
 import CasesOverviewStatCard from "@components/support/cases-overview-stats/CasesOverviewStatCard";
-import NoveraChatBanner from "@components/support/novera-ai-assistant/novera-chat-banner/NoveraChatBanner";
 import SupportOverviewCard from "@components/support/support-overview-cards/SupportOverviewCard";
 import OutstandingCasesList from "@components/support/support-overview-cards/OutstandingCasesList";
 import ServiceRequestCard from "@components/support/request-cards/ServiceRequestCard";
@@ -137,7 +136,6 @@ export default function SupportPage(): JSX.Element {
         isError={isError}
         stats={stats}
       />
-      <NoveraChatBanner />
       <Grid container spacing={3} sx={{ alignItems: "stretch" }}>
         <Grid size={{ xs: 12, lg: 6 }} sx={{ display: "flex" }}>
           <SupportOverviewCard
