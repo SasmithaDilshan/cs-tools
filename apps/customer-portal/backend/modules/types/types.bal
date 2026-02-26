@@ -1069,6 +1069,23 @@ public type ChangeRequest record {|
 public type ChangeRequestSearchResponse record {|
     # List of change requests
     ChangeRequest[] changeRequests;
+|};
+
+# Catalog data.
+public type Catalog record {|
+    # ID
+    entity:IdString id;
+    # Name of the catalog
+    string name;
+    # List of catalog items
+    ReferenceItem[] catalogItems;
+    json...;
+|};
+
+# Catalog search response.
+public type CatalogSearchResponse record {|
+    # List of catalogs
+    Catalog[] catalogs;
     # Total records count
     int totalRecords;
     *entity:Pagination;

@@ -412,7 +412,7 @@ public isolated function getProjectTimeCardStats(string idToken, string projectI
 }
 
 # Search change requests of a project.
-# 
+#
 # + idToken - ID token for authorization
 # + payload - Change request search payload containing search criteria for change requests
 # + return - Change request search response containing matching change requests or error
@@ -420,4 +420,27 @@ public isolated function searchChangeRequests(string idToken, ChangeRequestSearc
     returns ChangeRequestSearchResponse|error {
 
     return csEntityClient->/change\-requests/search.post(payload, generateHeaders(idToken));
+}
+
+# Search catalogs.
+#
+# + idToken - ID token for authorization
+# + payload - Catalog search payload containing search criteria for catalogs
+# + return - Catalog search response containing matching catalogs or error
+public isolated function searchCatalogs(string idToken, CatalogSearchPayload payload)
+    returns CatalogSearchResponse|error {
+
+    return csEntityClient->/catalogs/search.post(payload, generateHeaders(idToken));
+}
+
+# Get catalog item variables.
+#
+# + idToken - ID token for authorization
+# + catalogId - Unique ID of the catalog to which the catalog item belongs
+# + catalogItemId - Unique ID of the catalog item for which variables are to be retrieved
+# + return - Catalog item variables response containing variables of the specified catalog item or error
+public isolated function getCatalogItemVariable(string idToken, string catalogId, string catalogItemId)
+    returns CatalogItemVariablesResponse|error {
+
+    return csEntityClient->/catalogs/[catalogId]/items/[catalogItemId]/variables.get(generateHeaders(idToken));
 }

@@ -1399,7 +1399,51 @@ public type ChangeRequest record {|
 public type ChangeRequestSearchResponse record {|
     # List of change requests
     ChangeRequest[] changeRequests;
+|};
+
+# Request payload for searching catalogs.
+public type CatalogSearchPayload record {|
+    # Deployed product ID
+    IdString deployedProductId;
+    # Pagination details (optional)
+    Pagination pagination?;
+|};
+
+# Catalog data.
+public type Catalog record {|
+    # ID
+    IdString id;
+    # Name of the catalog
+    string name;
+    # List of catalog items
+    ReferenceTableItem[] catalogItems;
+    json...;
+|};
+
+# Catalog search response.
+public type CatalogSearchResponse record {|
+    # List of catalogs
+    Catalog[] catalogs;
     # Total records count
     int totalRecords;
     *Pagination;
+|};
+
+# Catalog item variable information.
+public type CatalogItemVariable record {|
+    # Variable ID
+    IdString id;
+    # Question text for the variable
+    string questionText;
+    # Display order of the variable
+    int 'order;
+    # Type of the variable (e.g., "Single Line Text", "Multi Line Text")
+    string 'type;
+    json...;
+|};
+
+# Catalog item variables response.
+public type CatalogItemVariablesResponse record {|
+    # List of catalog item variables
+    CatalogItemVariable[] variables;
 |};
