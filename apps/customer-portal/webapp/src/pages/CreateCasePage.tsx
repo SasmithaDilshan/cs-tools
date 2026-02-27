@@ -595,7 +595,7 @@ export default function CreateCasePage(): JSX.Element {
       attachments: encodedAttachments,
       caseType: isSecurityReport
         ? CaseType.SECURITY_REPORT_ANALYSIS
-        : CaseType.DEFAULT_CASE,
+        : CaseType.CASE,
       deploymentId: String(deploymentMatch.id),
       description: descriptionPlain,
       issueTypeKey,

@@ -130,6 +130,7 @@ export const CaseType = {
   SERVICE_REQUEST: "service_request",
   SECURITY_REPORT_ANALYSIS: "security_report_analysis",
   ANNOUNCEMENT: "announcement",
+  CASE: "case",
 } as const;
 
 export type CaseType = (typeof CaseType)[keyof typeof CaseType];
