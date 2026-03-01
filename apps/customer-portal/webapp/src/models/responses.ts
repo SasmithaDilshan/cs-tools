@@ -29,10 +29,12 @@ export interface ProjectListItem {
 export interface ProjectDetailsAccount {
   id: string;
   name: string;
-  activationDate: string;
-  deactivationDate: string;
+  activationDate: string | null;
+  deactivationDate: string | null;
   supportTier: string;
-  region: string;
+  region: string | null;
+  ownerEmail: string | null;
+  technicalOwnerEmail: string | null;
 }
 
 /** Detailed project information including account/subscription details. */
@@ -46,6 +48,8 @@ export interface ProjectDetails {
   createdOn: string;
   description: string;
   hasSR: boolean;
+  startDate?: string;
+  endDate?: string;
 }
 
 // Project Search Response.

@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useParams, useNavigate } from "react-router";
+import { useParams, useNavigate, useSearchParams } from "react-router";
 import {
   useState,
   useMemo,
@@ -53,6 +53,8 @@ import AllCasesList from "@components/support/all-cases/AllCasesList";
 export default function AllCasesPage(): JSX.Element {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
+  const createdByMe = searchParams.get("createdByMe") === "true";
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
@@ -90,19 +92,21 @@ export default function AllCasesPage(): JSX.Element {
         issueId: filters.issueTypes ? Number(filters.issueTypes) : undefined,
         deploymentId: filters.deploymentId || undefined,
         searchQuery: searchTerm.trim() || undefined,
+        createdByMe: createdByMe || undefined,
       },
       sortBy: {
         field: "createdOn",
         order: sortOrder,
       },
     }),
-    [filters, searchTerm, sortOrder],
+    [filters, searchTerm, sortOrder, createdByMe],
   );
 
   // Fetch all cases using infinite query (runs in parallel with stats when projectId and auth are ready)
   const {
     data,
     isLoading: isCasesQueryLoading,
+    isError: isCasesError,
     hasNextPage,
     fetchNextPage,
   } = useGetProjectCases(projectId || "", caseSearchRequest, {
@@ -200,10 +204,12 @@ export default function AllCasesPage(): JSX.Element {
         </Button>
         <Box>
           <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
-            All Cases
+            {createdByMe ? "My Cases" : "All Cases"}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage and track all your support cases
+            {createdByMe
+              ? "Manage and track your support cases"
+              : "Manage and track all your support cases"}
           </Typography>
         </Box>
       </Box>
@@ -264,6 +270,7 @@ export default function AllCasesPage(): JSX.Element {
       <AllCasesList
         cases={paginatedCases}
         isLoading={isCasesAreaLoading}
+        isError={isCasesError}
         onCaseClick={(c) => navigate(`/${projectId}/support/cases/${c.id}`)}
       />
 

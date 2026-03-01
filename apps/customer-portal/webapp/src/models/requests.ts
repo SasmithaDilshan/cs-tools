@@ -22,6 +22,9 @@ export interface PaginationRequest {
 
 // Request body for searching projects.
 export interface SearchProjectsRequest {
+  filters?: {
+    searchQuery?: string;
+  };
   pagination?: PaginationRequest;
 }
 
@@ -35,6 +38,7 @@ export interface CaseSearchRequest {
     statusIds?: number[];
     searchQuery?: string;
     caseTypes?: string[];
+    createdByMe?: boolean;
   };
   pagination: PaginationRequest;
   sortBy?: {
@@ -48,6 +52,7 @@ export interface ConversationSearchRequest {
   filters?: {
     searchQuery?: string;
     stateKeys?: number[];
+    createdByMe?: boolean;
   };
   pagination: PaginationRequest;
   sortBy?: {

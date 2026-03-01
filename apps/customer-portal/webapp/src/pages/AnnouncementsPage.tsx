@@ -32,7 +32,6 @@ import useGetCasesFilters from "@api/useGetCasesFilters";
 import { useGetProjectCasesPage } from "@api/useGetProjectCasesPage";
 import { CaseType } from "@constants/supportConstants";
 import type { AnnouncementFilterValues } from "@constants/supportConstants";
-import AnnouncementStatCards from "@components/support/announcements/AnnouncementStatCards";
 import AnnouncementsSearchBar from "@components/support/announcements/AnnouncementsSearchBar";
 import AnnouncementList from "@components/support/announcements/AnnouncementList";
 import AllCasesListSkeleton from "@components/support/all-cases/AllCasesListSkeleton";
@@ -129,8 +128,6 @@ export default function AnnouncementsPage(): JSX.Element {
           </Typography>
         </Box>
       </Box>
-
-      <AnnouncementStatCards />
 
       <AnnouncementsSearchBar
         searchTerm={searchTerm}
