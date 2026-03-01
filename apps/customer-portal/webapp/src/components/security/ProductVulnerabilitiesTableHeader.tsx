@@ -82,7 +82,7 @@ const ProductVulnerabilitiesTableHeader = ({
           <Box>
             <Typography variant="h6">Component Analysis</Typography>
             <Typography variant="body2" color="text.secondary">
-              Analyze dependencies and components in your projects
+              Third-party components with known vulnerabilities and remediation status
             </Typography>
           </Box>
         </Box>

@@ -37,10 +37,12 @@ import {
   stripHtml,
 } from "@utils/support";
 import AllCasesListSkeleton from "@components/support/all-cases/AllCasesListSkeleton";
+import ErrorIndicator from "@components/common/error-indicator/ErrorIndicator";
 
 export interface AllCasesListProps {
   cases: CaseListItem[];
   isLoading: boolean;
+  isError?: boolean;
   onCaseClick?: (caseItem: CaseListItem) => void;
 }
 
@@ -53,12 +55,24 @@ export interface AllCasesListProps {
 export default function AllCasesList({
   cases,
   isLoading,
+  isError = false,
   onCaseClick,
 }: AllCasesListProps): JSX.Element {
   const theme = useTheme();
 
   if (isLoading) {
     return <AllCasesListSkeleton />;
+  }
+
+  if (isError) {
+    return (
+      <Box sx={{ textAlign: "center", py: 6 }}>
+        <ErrorIndicator entityName="cases" size="medium" />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          Failed to load cases. Please try again.
+        </Typography>
+      </Box>
+    );
   }
 
   if (cases.length === 0) {

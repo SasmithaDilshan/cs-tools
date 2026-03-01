@@ -39,10 +39,12 @@ import {
   resolveColorFromTheme,
 } from "@utils/support";
 import AllConversationsListSkeleton from "./AllConversationsListSkeleton";
+import ErrorIndicator from "@components/common/error-indicator/ErrorIndicator";
 
 export interface AllConversationsListProps {
   conversations: Conversation[];
   isLoading: boolean;
+  isError?: boolean;
   onConversationClick?: (conversation: Conversation) => void;
 }
 
@@ -55,12 +57,24 @@ export interface AllConversationsListProps {
 export default function AllConversationsList({
   conversations,
   isLoading,
+  isError = false,
   onConversationClick,
 }: AllConversationsListProps): JSX.Element {
   const theme = useTheme();
 
   if (isLoading) {
     return <AllConversationsListSkeleton />;
+  }
+
+  if (isError) {
+    return (
+      <Box sx={{ textAlign: "center", py: 6 }}>
+        <ErrorIndicator entityName="conversations" size="medium" />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          Failed to load conversations. Please try again.
+        </Typography>
+      </Box>
+    );
   }
 
   if (conversations.length === 0) {
