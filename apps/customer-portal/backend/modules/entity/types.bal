@@ -83,6 +83,11 @@ public type Project record {|
 
 # Payload for searching projects.
 public type ProjectSearchPayload record {|
+    # Filter criteria
+    record {
+        # Search query for projects
+        string searchQuery?;
+    } filters?;
     # Pagination details
     Pagination pagination = {};
 |};
@@ -118,6 +123,10 @@ public type ProjectResponse record {|
         string? supportTier;
         # Region
         string? region;
+        # Owner email
+        string? ownerEmail;
+        # Technical owner email
+        string? technicalOwnerEmail;
         json...;
     |}? account;
     json...;
