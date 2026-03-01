@@ -155,7 +155,7 @@ public type CaseCreatePayload record {|
     CaseCreateAttachment[] attachments?;
 |};
 
-# Attachment for creatinig a case.
+# Attachment for creating a case.
 public type CaseCreateAttachment record {|
     # File name
     string name;
