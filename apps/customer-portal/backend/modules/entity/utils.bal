@@ -166,7 +166,7 @@ public isolated function validateCaseUpdatePayload(CaseUpdatePayload payload) re
 # + payload - Case create payload
 # + return - Validation error message or null if valid
 public isolated function validateCaseCreatePayload(CaseCreatePayload payload) returns string? {
-    CaseType caseType = payload.caseType ?: DEFAULT_CASE;
+    CaseType caseType = payload.'type ?: DEFAULT_CASE;
     string? title = payload.title;
     string? description = payload.description;
 
@@ -177,7 +177,7 @@ public isolated function validateCaseCreatePayload(CaseCreatePayload payload) re
         if title.trim().length() == 0 || title.length() > 500 {
             return "Title must be between 1 and 500 characters long for default case.";
         }
-        if description is () || description.trim().length() == 0  {
+        if description is () || description.trim().length() == 0 {
             return "Description cannnot be empty for default case.";
         }
         if payload.issueTypeKey is () {
@@ -198,9 +198,18 @@ public isolated function validateCaseCreatePayload(CaseCreatePayload payload) re
             return "At least one variable is required for service request case.";
         }
     } else if caseType == SECURITY_REPORT_ANALYSIS {
-        string[]? attachments = payload.attachments;
+        if title is () {
+            return "Title is required for security analysis case type.";
+        }
+        if title.trim().length() == 0 || title.length() > 500 {
+            return "Title must be between 1 and 500 characters long for security analysis case.";
+        }
+        if description is () || description.trim().length() == 0 {
+            return "Description is required for security analysis case.";
+        }
+        var attachments = payload.attachments;
         if attachments is () || attachments.length() == 0 {
-            return "At least one attachment is required for security report analysis case.";
+            return "At least one attachment is required for security analysis case.";
         }
     } else {
         return string `Case type ${caseType} is not supported.`;
