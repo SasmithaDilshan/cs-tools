@@ -16,7 +16,7 @@
 
 import { Box, Chip, Form, Typography, alpha, useTheme } from "@wso2/oxygen-ui";
 import { Calendar, FileText } from "@wso2/oxygen-ui-icons-react";
-import type { JSX, ReactElement } from "react";
+import type { JSX } from "react";
 import type { CaseListItem } from "@models/responses";
 import {
   formatUtcToLocalNoTimezone,
@@ -97,12 +97,12 @@ export default function AnnouncementList({
                   >
                     {caseItem.number || "--"}
                   </Typography>
-                  {statusLabel && (
+                  {statusLabel && statusChipIcon && (
                     <Chip
                       size="small"
                       variant="outlined"
                       label={statusLabel}
-                      icon={statusChipIcon}
+                      icon={statusChipIcon as React.ReactElement}
                       sx={{
                         bgcolor: alpha(resolvedStatusColor, 0.1),
                         color: resolvedStatusColor,
