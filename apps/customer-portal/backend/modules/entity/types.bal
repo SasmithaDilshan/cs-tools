@@ -152,12 +152,15 @@ public type CaseCreatePayload record {|
     # Variables for service request (required for SERVICE_REQUEST)
     Variable[] variables?;
     # List of attachments
-    record {|
-        # File name
-        string name;
-        # Base64 encoded file content
-        string file;
-    |}[] attachments?;
+    CaseCreateAttachment[] attachments?;
+|};
+
+# Attachment for creatinig a case.
+public type CaseCreateAttachment record {|
+    # File name
+    string name;
+    # Base64 encoded file content
+    string file;
 |};
 
 # Response from creating a case.

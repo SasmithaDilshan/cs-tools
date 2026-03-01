@@ -178,7 +178,7 @@ public isolated function validateCaseCreatePayload(CaseCreatePayload payload) re
             return "Title must be between 1 and 500 characters long for default case.";
         }
         if description is () || description.trim().length() == 0 {
-            return "Description cannnot be empty for default case.";
+            return "Description cannot be empty for default case.";
         }
         if payload.issueTypeKey is () {
             return "Issue type key is required for default case.";
@@ -207,9 +207,18 @@ public isolated function validateCaseCreatePayload(CaseCreatePayload payload) re
         if description is () || description.trim().length() == 0 {
             return "Description is required for security report analysis case.";
         }
-        var attachments = payload.attachments;
-        if attachments is () || attachments.length() == 0 {
-            return "At least one attachment is required for security analysis case.";
+        CaseCreateAttachment[]? attachments = payload.attachments;
+        if attachments is CaseCreateAttachment[] {
+            foreach CaseCreateAttachment attachment in attachments {
+                if attachment.name.trim().length() == 0 {
+                    return "Attachment name cannot be empty for security analysis case.";
+                }
+                if attachment.file.trim().length() == 0 {
+                    return "Attachment content cannot be empty for security analysis case.";
+                }
+            }
+        } else {
+            return "At least one attachment is required for security report analysis case.";
         }
     } else {
         return string `Case type ${caseType} is not supported.`;
