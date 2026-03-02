@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useParams, useNavigate } from "react-router";
+import { useParams, useNavigate, useSearchParams } from "react-router";
 import {
   useState,
   useMemo,
@@ -51,6 +51,8 @@ export type ServiceRequestStatusFilter =
 export default function ServiceRequestsPage(): JSX.Element {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
+  const createdByMe = searchParams.get("createdByMe") === "true";
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] =
@@ -63,13 +65,14 @@ export default function ServiceRequestsPage(): JSX.Element {
       filters: {
         caseTypes: [CaseType.SERVICE_REQUEST],
         searchQuery: searchTerm.trim() || undefined,
+        createdByMe: createdByMe || undefined,
       },
       sortBy: {
         field: "createdOn" as const,
         order: "desc" as const,
       },
     }),
-    [searchTerm],
+    [searchTerm, createdByMe],
   );
 
   const {
@@ -224,11 +227,12 @@ export default function ServiceRequestsPage(): JSX.Element {
             Back to Support Center
           </Button>
           <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
-            Service Requests
+            {createdByMe ? "My Service Requests" : "Service Requests"}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage deployments, and operations, infrastructure change, and
-            service configurations
+            {createdByMe
+              ? "Manage and track your service requests"
+              : "Manage deployments, and operations, infrastructure change, and service configurations"}
           </Typography>
         </Box>
         <Button
