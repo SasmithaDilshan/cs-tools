@@ -217,8 +217,9 @@ export default function ChangeRequestsPage(): JSX.Element {
     setPage(1);
   };
 
-  const handleChangeRequestClick = (item: ChangeRequestItem): void => {
-    navigate(`/${projectId}/support/change-requests/${item.id}`);
+  const handleChangeRequestClick = (_item: ChangeRequestItem): void => {
+    // Navigation disabled - details page not yet implemented
+    // navigate(`/${projectId}/support/change-requests/${item.id}`);
   };
 
   const handleExportSchedule = () => {
