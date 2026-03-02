@@ -281,6 +281,11 @@ export default function ServiceRequestDetailContent({
       },
       {
         onSuccess: () => setCommentText(""),
+        onError: (err) => {
+          showError(
+            err?.message ?? "Failed to add comment. Please try again.",
+          );
+        },
       },
     );
   };
@@ -464,6 +469,17 @@ export default function ServiceRequestDetailContent({
                 const filtered = requestDetailSections.filter(
                   (s) => !/^wso2\s*product$/i.test(s.label.trim()),
                 );
+                if (filtered.length === 0) {
+                  return (
+                    <Typography
+                      variant="body2"
+                      color="text.primary"
+                      sx={{ whiteSpace: "pre-wrap" }}
+                    >
+                      {stripHtml(data?.description ?? "") || "--"}
+                    </Typography>
+                  );
+                }
                 return filtered.map((section, index) => (
                   <Box key={`${section.label}-${index}`} sx={{ mb: 1.5 }}>
                     <Typography
