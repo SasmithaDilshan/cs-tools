@@ -55,3 +55,9 @@ public enum CaseType {
     SECURITY_REPORT_ANALYSIS = "security_report_analysis",
     ANNOUNCEMENT = "announcement"
 }
+
+# Time card state enum
+public enum TimeCardState {
+    APPROVED = "Approved",
+    SUBMITTED = "Submitted"
+}

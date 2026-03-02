@@ -461,6 +461,8 @@ public type DeployedProductCreatePayload record {|
     int? cores?;
     # TPS allocated for the product
     decimal? tps?;
+    # Description of the deployed product
+    string? description?;
 |};
 
 # Payload for creating a comment.
@@ -887,6 +889,8 @@ public type TimeCardSearchPayload record {|
         entity:Date startDate?;
         # End date for filtering time cards (ISO 8601 format)
         entity:Date endDate?;
+        # State of the time cards to filter (e.g., "Approved", "Submitted", etc.)
+        entity:TimeCardState state?;
     } filters?;
     # Pagination details
     entity:Pagination pagination?;
@@ -1070,6 +1074,10 @@ public type ChangeRequest record {|
     ReferenceItem? state;
     # Type information
     ReferenceItem? 'type;
+    # Assigned engineer
+    ReferenceItem? assignedEngineer;
+    # Assigned team
+    ReferenceItem? assignedTeam;
     # Created date and time
     string createdOn;
     # Updated date and time
@@ -1150,6 +1158,10 @@ public type ChangeRequestResponse record {|
     boolean hasCustomerApproved;
     # Indicates if the customer has reviewed
     boolean hasCustomerReviewed;
+    # Internal approval details
+    ReferenceItem? approvedBy;
+    # Internal approval date and time
+    string? approvedOn;
 |};
 
 # Change request statistics.
