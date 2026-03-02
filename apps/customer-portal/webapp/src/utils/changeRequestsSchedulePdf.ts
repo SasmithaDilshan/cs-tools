@@ -28,20 +28,24 @@ import { formatImpactLabel } from "@constants/supportConstants";
  */
 function formatScheduledDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "N/A";
-  
+
   // Normalize ServiceNow format (YYYY-MM-DD HH:mm:ss) to ISO format with UTC timezone
   let normalizedDateStr = dateStr;
   if (dateStr.includes(" ")) {
     // Replace space with "T" and append "Z" for UTC if no timezone info exists
     normalizedDateStr = dateStr.replace(" ", "T");
-    if (!normalizedDateStr.includes("Z") && !normalizedDateStr.includes("+") && !normalizedDateStr.includes("-", 10)) {
+    if (
+      !normalizedDateStr.includes("Z") &&
+      !normalizedDateStr.includes("+") &&
+      !normalizedDateStr.includes("-", 10)
+    ) {
       normalizedDateStr += "Z";
     }
   }
-  
+
   const d = new Date(normalizedDateStr);
   if (isNaN(d.getTime())) return "N/A";
-  
+
   // Format with explicit UTC timezone for consistency
   return d.toLocaleString("en-US", {
     month: "short",
@@ -134,16 +138,35 @@ export function generateChangeRequestsSchedulePdf(
     margin: { left: 14 },
   });
 
-  // Add page numbers
+  // Add footer with WSO2 Support, page numbers, and created date
+  const createdDateTime = new Date().toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
   const totalPages = doc.getNumberOfPages();
+  const pageWidth = doc.internal.pageSize.getWidth();
+
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     doc.setFontSize(8);
-    doc.text(
-      `Change Requests Schedule - Page ${i} of ${totalPages}`,
-      14,
-      doc.internal.pageSize.getHeight() - 10,
-    );
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const footerY = pageHeight - 10;
+
+    // Left: WSO2 Support 24x7
+    doc.text("WSO2 Support 24x7", 14, footerY);
+
+    // Center: Page numbers with title
+    const pageText = `Change Requests Schedule - Page ${i} of ${totalPages}`;
+    const textWidth = doc.getTextWidth(pageText);
+    doc.text(pageText, (pageWidth - textWidth) / 2, footerY);
+
+    // Right: Created date and time
+    const dateWidth = doc.getTextWidth(createdDateTime);
+    doc.text(createdDateTime, pageWidth - 14 - dateWidth, footerY);
   }
 
   // Download the PDF
