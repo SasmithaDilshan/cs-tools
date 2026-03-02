@@ -39,6 +39,7 @@ export interface CaseDetailsActivityPanelProps {
   caseCreatedOn?: string | null;
   focusMode?: boolean;
   caseStatus?: string | null;
+  caseType?: { id?: string; label?: string } | null;
 }
 
 /**
@@ -53,6 +54,7 @@ export default function CaseDetailsActivityPanel({
   caseCreatedOn,
   focusMode = false,
   caseStatus,
+  caseType,
 }: CaseDetailsActivityPanelProps): JSX.Element {
   const theme = useTheme();
   const { data: userDetails } = useGetUserDetails();
@@ -137,6 +139,7 @@ export default function CaseDetailsActivityPanel({
         caseId={caseId}
         focusMode={focusMode}
         caseStatus={caseStatus}
+        caseType={caseType}
       />
     </Box>
   );
