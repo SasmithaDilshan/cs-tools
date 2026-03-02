@@ -1165,7 +1165,7 @@ public type TimeCardSearchPayload record {|
         Date startDate?;
         # End date for filtering time cards (ISO 8601 format)
         Date endDate?;
-        # State of the time cards to filter (e.g., "Approved", "Submitted", etc.)
+        # States of the time cards to filter (e.g., "Approved", "Submitted", etc.)
         TimeCardState[] states?;
     } filters?;
     # Pagination details
