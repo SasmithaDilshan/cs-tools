@@ -19,6 +19,12 @@ import { describe, it, expect } from "vitest";
 import TimeCardsDateFilter from "@time-tracking/TimeCardsDateFilter";
 
 describe("TimeCardsDateFilter", () => {
+  const mockTimeCardStates = [
+    { id: "Pending", label: "Pending" },
+    { id: "Submitted", label: "Submitted" },
+    { id: "Approved", label: "Approved" },
+  ];
+
   it("should render filter by date range label and date inputs", () => {
     render(
       <TimeCardsDateFilter
@@ -26,6 +32,9 @@ describe("TimeCardsDateFilter", () => {
         endDate="2025-12-31"
         onStartDateChange={() => {}}
         onEndDateChange={() => {}}
+        state=""
+        onStateChange={() => {}}
+        timeCardStates={mockTimeCardStates}
         shownCount={5}
         totalCount={5}
       />,
@@ -33,6 +42,9 @@ describe("TimeCardsDateFilter", () => {
 
     expect(
       screen.getByText("Filter by Date Range:"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Filter by State:"),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Showing 5 of 5 time logs"),
@@ -46,6 +58,9 @@ describe("TimeCardsDateFilter", () => {
         endDate="2025-12-31"
         onStartDateChange={() => {}}
         onEndDateChange={() => {}}
+        state=""
+        onStateChange={() => {}}
+        timeCardStates={mockTimeCardStates}
         shownCount={0}
         totalCount={0}
         isLoading

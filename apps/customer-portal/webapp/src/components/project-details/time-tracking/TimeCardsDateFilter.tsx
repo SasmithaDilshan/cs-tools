@@ -20,15 +20,22 @@ import {
   Typography,
   TextField,
   InputAdornment,
+  FormControl,
+  Select,
+  MenuItem,
 } from "@wso2/oxygen-ui";
-import { Calendar } from "@wso2/oxygen-ui-icons-react";
+import { Calendar, Filter } from "@wso2/oxygen-ui-icons-react";
 import { type JSX } from "react";
+import type { MetadataItem } from "@models/responses";
 
 export interface TimeCardsDateFilterProps {
   startDate: string;
   endDate: string;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
+  state: string;
+  onStateChange: (value: string) => void;
+  timeCardStates?: MetadataItem[];
   shownCount: number;
   totalCount: number;
   isLoading?: boolean;
@@ -45,6 +52,9 @@ export default function TimeCardsDateFilter({
   endDate,
   onStartDateChange,
   onEndDateChange,
+  state,
+  onStateChange,
+  timeCardStates = [],
   shownCount,
   totalCount,
   isLoading = false,
@@ -127,6 +137,42 @@ export default function TimeCardsDateFilter({
               }}
             />
           </Box>
+        </Box>
+      </Box>
+
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Filter size={16} style={{ color: "var(--oxygen-palette-text-secondary)" }} />
+          <Typography
+            variant="body2"
+            component="label"
+            sx={{ fontWeight: 500, color: "text.secondary" }}
+          >
+            Filter by State:
+          </Typography>
+        </Box>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            flexWrap: "wrap",
+          }}
+        >
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <Select
+              value={state}
+              onChange={(e) => onStateChange(e.target.value as string)}
+              displayEmpty
+            >
+              <MenuItem value="">All States</MenuItem>
+              {timeCardStates.map((stateOption) => (
+                <MenuItem key={stateOption.id} value={stateOption.label}>
+                  {stateOption.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <Typography
             variant="body2"
             sx={{ color: "text.secondary", ml: "auto" }}

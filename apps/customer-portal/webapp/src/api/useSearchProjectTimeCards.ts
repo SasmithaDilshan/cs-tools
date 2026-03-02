@@ -26,6 +26,7 @@ export interface UseSearchProjectTimeCardsParams {
   projectId: string;
   startDate?: string;
   endDate?: string;
+  state?: string;
   limit?: number;
   offset?: number;
 }
@@ -40,6 +41,7 @@ export default function useSearchProjectTimeCards({
   projectId,
   startDate,
   endDate,
+  state,
   limit = 10,
   offset = 0,
 }: UseSearchProjectTimeCardsParams): UseQueryResult<
@@ -56,6 +58,7 @@ export default function useSearchProjectTimeCards({
       projectId,
       startDate,
       endDate,
+      state,
       limit,
       offset,
     ],
@@ -76,6 +79,7 @@ export default function useSearchProjectTimeCards({
           filters: {
             startDate,
             endDate,
+            ...(state && { state }),
           },
           pagination: { limit, offset },
         };

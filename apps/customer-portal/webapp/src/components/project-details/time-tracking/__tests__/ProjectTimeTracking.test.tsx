@@ -19,9 +19,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import ProjectTimeTracking from "@time-tracking/ProjectTimeTracking";
 import useSearchProjectTimeCards from "@api/useSearchProjectTimeCards";
 import useGetTimeCardsStats from "@api/useGetTimeCardsStats";
+import useGetProjectFilters from "@api/useGetProjectFilters";
 
 vi.mock("@api/useSearchProjectTimeCards");
 vi.mock("@api/useGetTimeCardsStats");
+vi.mock("@api/useGetProjectFilters");
 
 vi.mock("@time-tracking/TimeTrackingStatCards", () => ({
   default: ({ isLoading, isError }: { isLoading?: boolean; isError?: boolean }) => (
@@ -63,6 +65,19 @@ describe("ProjectTimeTracking", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    
+    // Mock project filters with timeCardStates
+    vi.mocked(useGetProjectFilters).mockReturnValue({
+      data: {
+        timeCardStates: [
+          { id: "Pending", label: "Pending" },
+          { id: "Submitted", label: "Submitted" },
+          { id: "Approved", label: "Approved" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as any);
   });
 
   it("should render 7 skeletons when time cards are loading", () => {

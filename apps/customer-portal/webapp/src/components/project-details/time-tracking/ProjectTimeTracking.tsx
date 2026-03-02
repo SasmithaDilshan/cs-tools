@@ -18,6 +18,7 @@ import { Box, Grid } from "@wso2/oxygen-ui";
 import { useState, useMemo, type JSX } from "react";
 import useSearchProjectTimeCards from "@api/useSearchProjectTimeCards";
 import useGetTimeCardsStats from "@api/useGetTimeCardsStats";
+import useGetProjectFilters from "@api/useGetProjectFilters";
 import TimeTrackingStatCards from "@time-tracking/TimeTrackingStatCards";
 import TimeCardsDateFilter from "@time-tracking/TimeCardsDateFilter";
 import TimeTrackingCard from "@time-tracking/TimeTrackingCard";
@@ -60,6 +61,9 @@ export default function ProjectTimeTracking({
   );
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
+  const [state, setState] = useState("");
+
+  const { data: filters } = useGetProjectFilters(projectId);
 
   const {
     data: stats,
@@ -79,6 +83,7 @@ export default function ProjectTimeTracking({
     projectId,
     startDate,
     endDate,
+    state: state || undefined,
     limit: 50,
     offset: 0,
   });
@@ -100,6 +105,9 @@ export default function ProjectTimeTracking({
           endDate={endDate}
           onStartDateChange={setStartDate}
           onEndDateChange={setEndDate}
+          state={state}
+          onStateChange={setState}
+          timeCardStates={filters?.timeCardStates}
           shownCount={timeCards.length}
           totalCount={totalRecords}
           isLoading={isTimeCardsLoading}
