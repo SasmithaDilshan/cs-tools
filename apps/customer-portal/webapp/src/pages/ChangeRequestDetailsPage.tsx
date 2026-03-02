@@ -47,7 +47,6 @@ import {
 } from "@wso2/oxygen-ui-icons-react";
 import { useIsMutating } from "@tanstack/react-query";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
-import { ApiMutationKeys } from "@constants/apiConstants";
 import ErrorStateIcon from "@components/common/error-state/ErrorStateIcon";
 import ErrorIndicator from "@components/common/error-indicator/ErrorIndicator";
 import useGetChangeRequestDetails from "@api/useGetChangeRequestDetails";
@@ -125,8 +124,8 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
     void fetchNextPage();
   }, [commentsData, hasNextPage, fetchNextPage]);
 
-  // Check if any comment mutation is pending (scoped to postComment)
-  const isPostingComment = useIsMutating({ mutationKey: ApiMutationKeys.POST_COMMENT }) > 0;
+  // Check if any change request comment mutation is pending
+  const isPostingComment = useIsMutating({ mutationKey: ["postChangeRequestComment"] }) > 0;
 
   const commentsSorted = useMemo(() => {
     // Flatten all comments from all pages
