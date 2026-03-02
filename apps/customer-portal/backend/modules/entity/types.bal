@@ -1206,7 +1206,7 @@ public type TimeCard record {|
     string createdOn;
     # Indicates if the time card has billable hours
     boolean hasBillable;
-    # State information (e.g., "Approved", "Submitted")
+    # State information (e.g., "Approved", "Submitted", etc.)
     ChoiceListItem? state;
     # User who approved the time card
     ReferenceTableItem? approvedBy;
