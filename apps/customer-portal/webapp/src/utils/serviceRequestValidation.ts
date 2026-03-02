@@ -51,6 +51,16 @@ function isAttachmentFieldByQuestionText(questionText: string): boolean {
   return patterns.some((p) => p.test(q));
 }
 
+/** True if variable is a File Copy Path field (use text input instead of upload). */
+export function isFileCopyPathField(variable: CatalogItemVariable): boolean {
+  const q = (variable.questionText ?? "").trim().toLowerCase();
+  const t = (variable.type ?? "").trim().toLowerCase();
+  return (
+    /file\s*copy\s*path/i.test(q) ||
+    /file\s*copy\s*path/i.test(t)
+  );
+}
+
 /** True if variable is an attachment/file upload field (by type or questionText). */
 export function isAttachmentField(variable: CatalogItemVariable): boolean {
   return (
@@ -127,7 +137,7 @@ export function getFirstEmptyRequiredField(
 ): string | null {
   const userEditable = getUserEditableVariables(variables, contextValues);
   for (const v of userEditable) {
-    if (isAttachmentField(v)) continue; // Attachments are optional
+    if (isAttachmentField(v) || isFileCopyPathField(v)) continue; // Attachments and File Copy Path are optional
     const value = (variableValues[v.id] ?? "").trim();
     if (!value) {
       const label = (v.questionText ?? "").replace(/^\s*\*?\s*/, "").trim() || "Field";

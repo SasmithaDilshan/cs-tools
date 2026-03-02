@@ -31,14 +31,13 @@ import {
 import {
   ArrowLeft,
   Calendar,
+  Folder,
+  Globe,
   Layers,
   MessageSquare,
   Package,
+  Send,
   User,
-  Users,
-  Folder,
-  Globe,
-  CirclePlay,
 } from "@wso2/oxygen-ui-icons-react";
 import useGetCasesFilters from "@api/useGetCasesFilters";
 import { usePatchCase } from "@api/usePatchCase";
@@ -558,7 +557,7 @@ export default function ServiceRequestDetailContent({
                 })
               )}
             </Stack>
-            <Stack direction="row" spacing={1} alignItems="flex-start">
+            <Stack spacing={1.5}>
               <TextField
                 fullWidth
                 multiline
@@ -568,14 +567,19 @@ export default function ServiceRequestDetailContent({
                 onChange={(e) => setCommentText(e.target.value)}
                 size="small"
               />
-              <Button
-                variant="contained"
-                color="primary"
-                onClick={handleAddComment}
-                disabled={!commentText.trim() || postComment.isPending}
-              >
-                Add comment
-              </Button>
+              <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Send size={16} />}
+                  onClick={handleAddComment}
+                  disabled={!commentText.trim() || postComment.isPending}
+                  sx={{ textTransform: "none" }}
+                >
+                  Add Comment
+                </Button>
+              </Box>
             </Stack>
           </Paper>
         </Stack>
@@ -585,133 +589,162 @@ export default function ServiceRequestDetailContent({
             <Typography variant="subtitle2" color="text.primary" sx={{ mb: 1.5 }}>
               Assignment
             </Typography>
-            <Stack spacing={1.5}>
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  p: 1.5,
-                  bgcolor: alpha(theme.palette.primary?.main ?? "#fa7b3f", 0.08),
-                }}
-              >
-                <Users
-                  size={16}
-                  color={theme.palette.primary?.main ?? "#fa7b3f"}
-                />
-                <Typography variant="body2" color="text.primary">
-                  Assigned To: {assignedLabel ?? "--"}
-                </Typography>
-              </Box>
-              {data?.issueType?.label && (
+            <Stack spacing={2}>
+              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
                 <Box
                   sx={{
+                    width: 40,
+                    height: 40,
                     display: "flex",
                     alignItems: "center",
-                    gap: 1,
-                    p: 1.5,
-                    bgcolor: alpha(theme.palette.info?.light ?? "#0288d1", 0.12),
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    bgcolor: alpha(
+                      theme.palette.primary?.main ?? "#fa7b3f",
+                      0.12,
+                    ),
+                    borderRadius: "50%",
+                  }}
+                >
+                  <User
+                    size={20}
+                    color={theme.palette.primary?.main ?? "#fa7b3f"}
+                  />
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                  >
+                    Assigned To
+                  </Typography>
+                  <Typography variant="body2" fontWeight={600} color="text.primary">
+                    {assignedLabel ?? "--"}
+                  </Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    bgcolor: alpha(
+                      theme.palette.info?.main ?? "#0288d1",
+                      0.12,
+                    ),
+                    borderRadius: "50%",
                   }}
                 >
                   <Folder
-                    size={16}
+                    size={20}
                     color={theme.palette.info?.main ?? "#0288d1"}
                   />
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
                   <Typography
-                    variant="body2"
-                    sx={{ color: theme.palette.info?.main ?? "#0288d1" }}
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
                   >
-                    Category: {data.issueType.label}
+                    Category
+                  </Typography>
+                  <Typography variant="body2" fontWeight={600} color="text.primary">
+                    {data?.catalog?.label ?? "--"}
                   </Typography>
                 </Box>
-              )}
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
-                <CirclePlay size={14} />
-                <Typography variant="caption" color="text.secondary">
-                  Manage service request status
-                </Typography>
               </Box>
-              <Stack direction="row" spacing={1} flexWrap="wrap">
-                {CASE_STATUS_ACTIONS.filter((action) =>
-                  getAvailableCaseActions(statusLabel).includes(action.label),
-                )
-                  .filter((action) => action.label !== "Open Related Case")
-                  .map(({ label, Icon }) => {
-                    const stateLabel = ACTION_TO_CASE_STATE_LABEL[label];
-                    const stateKeyEntry = caseStates?.find(
-                      (s) =>
-                        s.label.toLowerCase() ===
-                        (stateLabel ?? "").toLowerCase(),
-                    );
-                    const stateKey =
-                      stateKeyEntry && !Number.isNaN(Number(stateKeyEntry.id))
-                        ? Number(stateKeyEntry.id)
-                        : undefined;
-                    const canPatch = stateKey != null && !!caseId;
-                    const isThisPending =
-                      patchCase.isPending && pendingActionLabel === label;
+            </Stack>
+          </Paper>
 
-                    return (
-                      <Button
-                        key={label}
-                        variant="outlined"
-                        size="small"
-                        startIcon={
-                          isThisPending ? (
-                            <Box
-                              sx={{
-                                width: 12,
-                                height: 12,
-                                borderRadius: "50%",
-                                border: "2px solid currentColor",
-                              }}
-                            />
-                          ) : (
-                            <Icon size={12} />
-                          )
-                        }
-                        disabled={patchCase.isPending || !canPatch}
-                        onClick={
-                          canPatch
-                            ? () => {
-                                setPendingActionLabel(label);
-                                patchCase.mutate(
-                                  { stateKey },
-                                  {
-                                    onSuccess: () => {
-                                      showSuccess(
-                                        "Service request status updated successfully.",
-                                      );
-                                    },
-                                    onError: (err) => {
-                                      showError(
-                                        err?.message ??
-                                          "Failed to update service request status. Please try again.",
-                                      );
-                                    },
-                                    onSettled: () => {
-                                      setPendingActionLabel(null);
-                                    },
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 0 }}>
+            <Typography variant="subtitle2" color="text.primary" sx={{ mb: 1.5 }}>
+              Manage service request status
+            </Typography>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {CASE_STATUS_ACTIONS.filter((action) =>
+                getAvailableCaseActions(statusLabel).includes(action.label),
+              )
+                .filter((action) => action.label !== "Open Related Case")
+                .map(({ label, Icon }) => {
+                  const stateLabel = ACTION_TO_CASE_STATE_LABEL[label];
+                  const stateKeyEntry = caseStates?.find(
+                    (s) =>
+                      s.label.toLowerCase() ===
+                      (stateLabel ?? "").toLowerCase(),
+                  );
+                  const stateKey =
+                    stateKeyEntry && !Number.isNaN(Number(stateKeyEntry.id))
+                      ? Number(stateKeyEntry.id)
+                      : undefined;
+                  const canPatch = stateKey != null && !!caseId;
+                  const isThisPending =
+                    patchCase.isPending && pendingActionLabel === label;
+
+                  return (
+                    <Button
+                      key={label}
+                      variant="outlined"
+                      size="small"
+                      startIcon={
+                        isThisPending ? (
+                          <Box
+                            sx={{
+                              width: 12,
+                              height: 12,
+                              borderRadius: "50%",
+                              border: "2px solid currentColor",
+                            }}
+                          />
+                        ) : (
+                          <Icon size={12} />
+                        )
+                      }
+                      disabled={patchCase.isPending || !canPatch}
+                      onClick={
+                        canPatch
+                          ? () => {
+                              setPendingActionLabel(label);
+                              patchCase.mutate(
+                                { stateKey },
+                                {
+                                  onSuccess: () => {
+                                    showSuccess(
+                                      "Service request status updated successfully.",
+                                    );
                                   },
-                                );
-                              }
-                            : undefined
-                        }
-                        sx={{
-                          fontSize: "0.7rem",
-                          minHeight: 0,
-                          py: 0.5,
-                          px: 1,
-                          textTransform: "none",
-                        }}
-                      >
-                        {isThisPending
-                          ? toPresentContinuousActionLabel(label)
-                          : toPresentTenseActionLabel(label)}
-                      </Button>
-                    );
-                  })}
-              </Stack>
+                                  onError: (err) => {
+                                    showError(
+                                      err?.message ??
+                                        "Failed to update service request status. Please try again.",
+                                    );
+                                  },
+                                  onSettled: () => {
+                                    setPendingActionLabel(null);
+                                  },
+                                },
+                              );
+                            }
+                          : undefined
+                      }
+                      sx={{
+                        fontSize: "0.7rem",
+                        minHeight: 0,
+                        py: 0.5,
+                        px: 1,
+                        textTransform: "none",
+                      }}
+                    >
+                      {isThisPending
+                        ? toPresentContinuousActionLabel(label)
+                        : toPresentTenseActionLabel(label)}
+                    </Button>
+                  );
+                })}
             </Stack>
           </Paper>
 

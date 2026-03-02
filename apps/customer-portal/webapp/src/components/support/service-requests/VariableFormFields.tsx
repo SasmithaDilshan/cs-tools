@@ -29,7 +29,10 @@ import {
 import { Upload, X } from "@wso2/oxygen-ui-icons-react";
 import { useEffect, type JSX } from "react";
 import type { CatalogItemVariable } from "@models/responses";
-import { isAttachmentField } from "@utils/serviceRequestValidation";
+import {
+  isAttachmentField,
+  isFileCopyPathField,
+} from "@utils/serviceRequestValidation";
 import Editor from "@components/common/rich-text-editor/Editor";
 
 export interface VariableFormFieldsProps {
@@ -332,6 +335,27 @@ export default function VariableFormFields({
             value={displayValue}
             onChange={(e) => onChange(variable.id, e.target.value)}
             disabled={isContext}
+            sx={{
+              "& .MuiOutlinedInput-root": { borderRadius: 0 },
+            }}
+          />
+        </Grid>
+      );
+    }
+
+    if (isFileCopyPathField(variable)) {
+      return (
+        <Grid key={variable.id} size={{ xs: 12 }}>
+          <Box sx={{ mb: 1 }}>
+            <FieldLabel questionText={variable.questionText ?? ""} isRequired={false} />
+          </Box>
+          <TextField
+            fullWidth
+            size="small"
+            value={displayValue}
+            onChange={(e) => onChange(variable.id, e.target.value)}
+            disabled={isContext}
+            placeholder="Enter path..."
             sx={{
               "& .MuiOutlinedInput-root": { borderRadius: 0 },
             }}

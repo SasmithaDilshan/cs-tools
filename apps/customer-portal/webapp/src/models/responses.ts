@@ -432,6 +432,8 @@ export interface CaseDetails {
   parentCase: IdLabelRef | null;
   conversation: unknown;
   issueType: IdLabelRef | null;
+  catalog?: IdLabelRef | null;
+  catalogItem?: IdLabelRef | null;
   deployment: IdLabelRef | null;
   severity: IdLabelRef | null;
   status: IdLabelRef | null;
