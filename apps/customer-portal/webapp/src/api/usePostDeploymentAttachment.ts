@@ -20,8 +20,8 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { useAsgardeo } from "@asgardeo/react";
+import { useAuthApiClient } from "@api/useAuthApiClient";
 import { useLogger } from "@hooks/useLogger";
-import { addApiHeaders } from "@utils/apiUtils";
 import { ApiQueryKeys } from "@constants/apiConstants";
 import type { PostDeploymentAttachmentRequest } from "@models/requests";
 import type { PostDeploymentAttachmentResponse } from "@models/responses";
@@ -44,7 +44,8 @@ export function usePostDeploymentAttachment(): UseMutationResult<
 > {
   const logger = useLogger();
   const queryClient = useQueryClient();
-  const { isSignedIn, isLoading: isAuthLoading, getIdToken } = useAsgardeo();
+  const { isSignedIn, isLoading: isAuthLoading } = useAsgardeo();
+  const authFetch = useAuthApiClient();
 
   return useMutation<
     PostDeploymentAttachmentResponse,
@@ -75,10 +76,9 @@ export function usePostDeploymentAttachment(): UseMutationResult<
         }
 
         const requestUrl = `${baseUrl}/deployments/${deploymentId}/attachments`;
-        const token = await getIdToken();
-        const response = await fetch(requestUrl, {
+        const response = await authFetch(requestUrl, {
           method: "POST",
-          headers: addApiHeaders(token),
+
           body: JSON.stringify(body),
         });
 
