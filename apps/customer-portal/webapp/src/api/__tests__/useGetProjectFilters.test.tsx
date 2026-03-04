@@ -39,10 +39,6 @@ vi.mock("@asgardeo/react", () => ({
   }),
 }));
 
-vi.mock("@context/AuthApiContext", () => ({
-  useAuthApiClient: () => mockAuthFetch,
-}));
-
 vi.mock("@/hooks/useLogger", () => ({
   useLogger: () => ({ debug: vi.fn(), error: vi.fn() }),
 }));
@@ -69,7 +65,9 @@ describe("useGetProjectFilters", () => {
   });
 
   it("should return filters from API", async () => {
-    const { result } = renderHook(() => useGetProjectFilters("123"), { wrapper });
+    const { result } = renderHook(() => useGetProjectFilters("123"), {
+      wrapper,
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -82,7 +80,9 @@ describe("useGetProjectFilters", () => {
       statusText: "Internal Server Error",
     });
 
-    const { result } = renderHook(() => useGetProjectFilters("123"), { wrapper });
+    const { result } = renderHook(() => useGetProjectFilters("123"), {
+      wrapper,
+    });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toContain("Internal Server Error");
