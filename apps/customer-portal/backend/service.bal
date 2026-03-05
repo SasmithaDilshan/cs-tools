@@ -17,6 +17,7 @@
 import customer_portal.ai_chat_agent;
 import customer_portal.authorization;
 import customer_portal.entity;
+import customer_portal.registry_tokens;
 import customer_portal.scim;
 import customer_portal.types;
 import customer_portal.updates;
@@ -3160,7 +3161,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
     }
 
     # Update a change request by change request ID.
-    # 
+    #
     # + id - ID of the change request
     # + payload - Change request update payload containing fields to be updated
     # + return - Updated change request details or an error
@@ -3393,5 +3394,179 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
         return mapCommentsResponse(commentsResponse);
+    }
+
+    # Create a registry token.
+    #
+    # + id - ID of the project for which the registry token is to be created
+    # + payload - Registry token creation payload containing project ID and token details
+    # + return - Created registry token details or an error response
+    resource function post projects/[entity:IdString id]/registry\-tokens(http:RequestContext ctx,
+            types:RegistryTokenCreatePayload payload)
+        returns registry_tokens:RegistryTokenResponse|http:BadRequest|http:InternalServerError {
+
+        authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
+        if userInfo is error {
+            return <http:InternalServerError>{
+                body: {
+                    message: ERR_MSG_USER_INFO_HEADER_NOT_FOUND
+                }
+            };
+        }
+
+        registry_tokens:RegistryTokenResponse|error response = registry_tokens:createRegistryToken(
+                {
+                    snProjectId: id,
+                    accountName: payload.accountName,
+                    projectKey: payload.projectKey,
+                    robotName: payload.robotName,
+                    snAccountId: payload.snAccountId,
+                    tokenType: payload.tokenType,
+                    createdBy: userInfo.email,
+                    createdFor: payload.createdFor
+                }
+        );
+        if response is error {
+            if getStatusCode(response) == http:STATUS_BAD_REQUEST {
+                return <http:BadRequest>{
+                    body: {
+                        message: "Invalid request parameters for creating registry token."
+                    }
+                };
+            }
+
+            string customError = "Failed to create registry token.";
+            log:printError(customError, response);
+            return <http:InternalServerError>{
+                body: {
+                    message: customError
+                }
+            };
+        }
+        return response;
+    }
+
+    # Search registry tokens for a project based on provided filters.
+    #
+    # + id - ID of the project for which registry tokens are to be searched
+    # + payload - Registry token search payload containing filters for searching registry tokens
+    # + return - List of registry tokens matching the criteria or an error response
+    resource function post projects/[entity:IdString id]/registry\-tokens/search(http:RequestContext ctx,
+            types:RegistryTokenSearchPayload payload) returns http:Ok|http:BadRequest|http:InternalServerError {
+
+        authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
+        if userInfo is error {
+            return <http:InternalServerError>{
+                body: {
+                    message: ERR_MSG_USER_INFO_HEADER_NOT_FOUND
+                }
+            };
+        }
+
+        registry_tokens:RegistryTokenResponse[]|error response = registry_tokens:searchRegistryTokens(
+                {
+                    snProjectId: id,
+                    snAccountId: payload.snAccountId,
+                    isAdmin: payload.isAdmin
+                }
+        );
+        if response is error {
+            if getStatusCode(response) == http:STATUS_BAD_REQUEST {
+                return <http:BadRequest>{
+                    body: {
+                        message: "Invalid request parameters for searching registry tokens."
+                    }
+                };
+            }
+
+            string customError = "Failed to search registry tokens.";
+            log:printError(customError, response);
+            return <http:InternalServerError>{
+                body: {
+                    message: customError
+                }
+            };
+        }
+        return <http:Ok>{
+            body: response
+        };
+    }
+
+    # Delete a registry token by token ID.
+    #
+    # + id - ID of the registry token to be deleted
+    # + return - Success message or an error response
+    resource function delete registry\-tokens/[string id](http:RequestContext ctx)
+        returns http:Ok|http:NotFound|http:InternalServerError {
+
+        authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
+        if userInfo is error {
+            return <http:InternalServerError>{
+                body: {
+                    message: ERR_MSG_USER_INFO_HEADER_NOT_FOUND
+                }
+            };
+        }
+
+        error? response = registry_tokens:deleteRegistryToken(id);
+        if response is error {
+            if getStatusCode(response) == http:STATUS_NOT_FOUND {
+                return <http:NotFound>{
+                    body: {
+                        message: "The registry token to be deleted is not found!"
+                    }
+                };
+            }
+
+            string customError = "Failed to delete registry token.";
+            log:printError(customError, response);
+            return <http:InternalServerError>{
+                body: {
+                    message: customError
+                }
+            };
+        }
+        return <http:Ok>{
+            body: {
+                message: "Registry token deleted successfully!"
+            }
+        };
+    }
+
+    # Regenerate a registry token by token ID.
+    #
+    # + id - ID of the registry token to be regenerated
+    # + return - Regenerated registry token details or an error response
+    resource function post registry\-tokens/[string id]/regenerate(http:RequestContext ctx)
+        returns registry_tokens:RegistryTokenResponse|http:NotFound|http:InternalServerError {
+
+        authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
+        if userInfo is error {
+            return <http:InternalServerError>{
+                body: {
+                    message: ERR_MSG_USER_INFO_HEADER_NOT_FOUND
+                }
+            };
+        }
+
+        registry_tokens:RegistryTokenResponse|error response = registry_tokens:regenerateRegistryToken(id);
+        if response is error {
+            if getStatusCode(response) == http:STATUS_NOT_FOUND {
+                return <http:NotFound>{
+                    body: {
+                        message: "The registry token to be regenerated is not found!"
+                    }
+                };
+            }
+
+            string customError = "Failed to regenerate registry token.";
+            log:printError(customError, response);
+            return <http:InternalServerError>{
+                body: {
+                    message: customError
+                }
+            };
+        }
+        return response;
     }
 }

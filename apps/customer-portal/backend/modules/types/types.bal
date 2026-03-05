@@ -14,6 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 import customer_portal.entity;
+import customer_portal.registry_tokens;
 
 import ballerina/constraint;
 
@@ -1177,4 +1178,36 @@ public type ProjectChangeRequestStatsResponse record {|
     int totalCount;
     # Count of change requests by state
     ReferenceItem[] stateCount;
+|};
+
+# Registry token creation payload.
+public type RegistryTokenCreatePayload record {|
+    # Customer account name
+    string accountName;
+    # Customer project key
+    string projectKey;
+    # Registry token name (provided by the user)
+    @constraint:String {
+        pattern: {
+            value: re `^[a-zA-Z0-9\-]+$`,
+            message: "Name can only contain alphanumeric characters and dashes"
+        }
+    }
+    string robotName;
+    # ServiceNow Account ID
+    string snAccountId;
+    # Token Type
+    registry_tokens:TokenType tokenType;
+    # Created for user email
+    string createdFor;
+|};
+
+# Registry token search payload.
+public type RegistryTokenSearchPayload record {|
+    # ServiceNow Account ID
+    string snAccountId;
+    # User email
+    string userEmail?;
+    # Is admin user
+    boolean isAdmin = false;
 |};
