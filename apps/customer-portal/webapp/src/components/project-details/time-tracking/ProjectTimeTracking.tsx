@@ -73,7 +73,8 @@ export default function ProjectTimeTracking({
   const [page, setPage] = useState(1);
   const pageSize = 10;
 
-  const { data: filters } = useGetProjectFilters(projectId);
+  const { data: filters, isLoading: isFiltersLoading } =
+    useGetProjectFilters(projectId);
 
   // Find approved state id from filters
   useEffect(() => {
@@ -108,6 +109,7 @@ export default function ProjectTimeTracking({
     startDate,
     endDate,
     states: approvedStateId ? [approvedStateId] : undefined,
+    enabled: !isFiltersLoading && Boolean(approvedStateId),
   });
 
   // Auto-fetch all remaining pages in background
