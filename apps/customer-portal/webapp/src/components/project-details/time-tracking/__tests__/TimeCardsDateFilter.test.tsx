@@ -33,6 +33,4 @@ describe("TimeCardsDateFilter", () => {
     expect(screen.getByLabelText("From:")).toBeInTheDocument();
     expect(screen.getByLabelText("To:")).toBeInTheDocument();
   });
-
-  // State dropdown test removed since filter is gone
 });
