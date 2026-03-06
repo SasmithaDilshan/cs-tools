@@ -292,21 +292,34 @@ export interface ChangeRequestItem {
   case: {
     id: string;
     label: string;
-    number: string;
+    number: string | null;
   } | null;
   deployment: {
-    type: string;
+    id: string;
+    label: string;
+    number?: string | null;
+  } | null;
+  deployedProduct: {
+    id: string;
+    label: string;
+    number?: string | null;
+  } | null;
+  product: {
+    id: string;
+    label: string;
+    number?: string | null;
+  } | null;
+  assignedEngineer: {
     id: string;
     label: string;
   } | null;
-  deployedProduct: {
-    version: string;
+  assignedTeam: {
     id: string;
     label: string;
   } | null;
   startDate: string;
   endDate: string;
-  duration: number;
+  duration: string | null;
   hasServiceOutage: boolean;
   impact: {
     id: string;
@@ -341,18 +354,6 @@ export interface ChangeRequestDetails extends ChangeRequestItem {
     label: string;
   } | null;
   approvedOn: string | null;
-  product: {
-    id: string;
-    label: string;
-  } | null;
-  assignedEngineer: {
-    id: string;
-    label: string;
-  } | null;
-  assignedTeam: {
-    id: string;
-    label: string;
-  } | null;
 }
 
 // Change Request Search Response
