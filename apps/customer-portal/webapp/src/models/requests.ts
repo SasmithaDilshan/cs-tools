@@ -235,3 +235,8 @@ export interface TimeCardSearchRequest {
 export interface ValidateContactRequest {
   contactEmail: string;
 }
+
+// Request body for PATCH /change-requests/:id (update planned start).
+export interface PatchChangeRequestRequest {
+  plannedStartOn: string;
+}
