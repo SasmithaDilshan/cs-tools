@@ -39,7 +39,10 @@ import {
   type CaseTypeInput,
 } from "@constants/supportConstants";
 import { CaseReportType } from "@constants/securityConstants";
-import { SEVERITY_LABEL_TO_DISPLAY } from "@constants/dashboardConstants";
+import {
+  SEVERITY_LABEL_TO_DISPLAY,
+  isS0SeverityLabel,
+} from "@constants/dashboardConstants";
 import type { CaseComment, MetadataItem } from "@models/responses";
 import { alpha, colors, type Theme } from "@wso2/oxygen-ui";
 import DOMPurify from "dompurify";
@@ -872,6 +875,19 @@ export function mapSeverityToDisplay(label?: string): string {
     ([k]) => k.toLowerCase() === lower,
   );
   return entry?.[1] ?? label;
+}
+
+/**
+ * Returns true if the case has S0 (Catastrophic) severity.
+ * Used to filter out S0 cases when project type is not Managed Cloud Subscription.
+ *
+ * @param caseItem - Case with optional severity.
+ * @returns {boolean}
+ */
+export function isS0Case(
+  caseItem: { severity?: { label?: string } | null },
+): boolean {
+  return isS0SeverityLabel(caseItem?.severity?.label);
 }
 
 /**
