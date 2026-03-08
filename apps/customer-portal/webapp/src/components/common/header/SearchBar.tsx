@@ -89,7 +89,10 @@ export default function SearchBar({
     },
   );
 
-  const rawCases: CaseListItem[] = data?.pages?.[0]?.cases ?? [];
+  const rawCases = useMemo(
+    () => (data?.pages?.flatMap((p) => p.cases ?? []) ?? []) as CaseListItem[],
+    [data?.pages],
+  );
   const cases = useMemo(
     () => (excludeS0 ? rawCases.filter((c) => !isS0Case(c)) : rawCases),
     [rawCases, excludeS0],
