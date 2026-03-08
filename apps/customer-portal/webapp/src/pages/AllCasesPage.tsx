@@ -66,10 +66,14 @@ export default function AllCasesPage(): JSX.Element {
   const [page, setPage] = useState(1);
   const pageSize = 10;
 
-  const { data: project } = useGetProjectDetails(projectId || "");
+  const {
+    data: project,
+    isLoading: isProjectLoading,
+  } = useGetProjectDetails(projectId || "");
+  const projectReady = !isProjectLoading && project !== undefined;
   const isManagedCloudSubscription =
     project?.type?.label === PROJECT_TYPE_LABELS.MANAGED_CLOUD_SUBSCRIPTION;
-  const excludeS0 = !isManagedCloudSubscription;
+  const excludeS0 = projectReady ? !isManagedCloudSubscription : false;
 
   // Fetch filter metadata first to get Incident and Query IDs for stats API
   const { data: filterMetadata } = useGetProjectFilters(projectId || "");
