@@ -13,25 +13,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-import ballerina/http;
 
-configurable string registryTokensBaseUrl = ?;
-configurable ClientCredentialsOauth2Config clientCredentialsOauth2Config = ?;
-
-final http:Client registryTokensClient = check new (registryTokensBaseUrl, {
-    auth: {
-        ...clientCredentialsOauth2Config
-    },
-    httpVersion: http:HTTP_1_1,
-    http1Settings: {keepAlive: http:KEEPALIVE_NEVER},
-    timeout: 300.0,
-    retryConfig: {
-        count: 3,
-        interval: 2.0,
-        statusCodes: [
-            http:STATUS_BAD_GATEWAY,
-            http:STATUS_SERVICE_UNAVAILABLE,
-            http:STATUS_GATEWAY_TIMEOUT
-        ]
-    }
-});
+# Toke types enum.
+public enum TokenType {
+    SERVICE_TOKEN = "Service",
+    USER_TOKEN = "User"
+}

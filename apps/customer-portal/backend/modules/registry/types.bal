@@ -27,9 +27,8 @@ type ClientCredentialsOauth2Config record {|
     string[] scopes = [];
 |};
 
-
 # Registry token creation payload.
-public type RegistryTokenCreatePayload record {|
+public type TokenCreatePayload record {|
     # Customer account name
     string accountName;
     # Customer project key
@@ -54,35 +53,51 @@ public type RegistryTokenCreatePayload record {|
     string createdBy;
 |};
 
-# Subscription sync payload.
-public type SubscriptionSyncPayload record {|
-    # Opportunity ID list
-    string[] opportunityIds;
-    # Email of the contact (optional)
-    string contactEmail?;
-|};
-
-# Partner sync payload.
-public type PartnerSyncPayload record {|
-    # List of partner emails to be synced
-    @constraint:Array {
-        minLength: {
-            value: 1,
-            message: "At least one partner email must be provided"
-        }
-    }
-    string[] emails;
-|};
-
 # Response of the created registry token.
-public type RegistryTokenResponse record {|
+public type TokenCreationResponse record {|
     # Registry token Secret
     string secret;
     json...;
 |};
 
+# Registry token response record.
+public type Token record {|
+    # Identifier of the token
+    int id?;
+    # Name
+    string name;
+    # Display name (name provide by the user)
+    string displayName?;
+    # Description
+    string description;
+    # Creation time of the token
+    string creationTime?;
+    # Token type
+    TokenType tokenType?;
+    # Created for
+    string createdFor?;
+    # Created by
+    string createdBy?;
+    # Expiry timestamp of the token
+    int expiresAt?;
+    # Whether the token is disabled
+    boolean disable = false;
+    # Duration for the token (-1 for unlimited)
+    int duration = -1;
+    # Permissions granted to the token
+    Permission[] permissions;
+    json...;
+|};
+
+# Permission configuration for token.
+public type Permission record {|
+    # Namespace for the permission
+    string namespace;
+    json...;
+|};
+
 # Registry token search payload.
-public type RegistryTokenSearchPayload record {|
+public type TokenSearchPayload record {|
     # ServiceNow Account ID
     string snAccountId;
     # ServiceNow Project ID
@@ -93,51 +108,25 @@ public type RegistryTokenSearchPayload record {|
     boolean isAdmin = false;
 |};
 
-# Registry token configuration.
-public type RegistryToken record {|
-    # ID
-    int id?;
-    # Name
-    string name;
-    # Display name (name provide by the user)
-    string displayName?;
-    # Description
-    string description;
-    # Creation time of the registry token
-    string creationTime?;
-    # Token type
-    TokenType tokenType?;
-    # Created for
-    string createdFor?;
-    # Created by
-    string createdBy?;
-    # Expiry timestamp of the registry token
-    int expiresAt?;
-    # Permission level
-    PermissionLevel level = SYSTEM;
-    # Whether the registry token is disabled
-    boolean disable = false;
-    # Duration for the registry token (-1 for unlimited)
-    int duration = -1;
-    # Permissions granted to the registry token
-    Permission[] permissions;
+# Integration user.
+public type IntegrationUser record {|
+    # Salesforce ID
+    string id;
+    # Email of the integration user
+    string email;
     json...;
 |};
 
-# Permission configuration for registry token.
-public type Permission record {|
-    # Kind of permission (e.g., "project")
-    string kind = "project";
-    # Namespace for the permission
-    string namespace;
-    # Access rights for this permission
-    Access[] access = [];
-|};
-
-# Access configuration for registry token permissions.
-public type Access record {|
-    # Resource type
-    ResourceType 'resource = REPOSITORY;
-    # Action allowed on the resource
-    AccessAction action;
+# Parsed components of a token description string.
+public type TokenDescriptionInfo record {|
+    # ServiceNow Account ID
+    string snAccountId;
+    # ServiceNow Project ID
+    string snProjectId;
+    # Token type (User or Service)
+    TokenType tokenType;
+    # Email of the user the token was created for
+    string createdFor;
+    # Email of the user who created the token
+    string createdBy;
 |};
