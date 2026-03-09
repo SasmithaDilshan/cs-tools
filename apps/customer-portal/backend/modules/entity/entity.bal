@@ -23,6 +23,15 @@ public isolated function getUserBasicInfo(string email, string idToken) returns 
     return csEntityClient->/users/me.get(generateHeaders(idToken));
 }
 
+# Update logged-in user information.
+#
+# + idToken - ID token for authorization
+# + payload - User update payload containing details to be updated in the user profile
+# + return - User update response containing details of the updated user profile or error
+public isolated function updateUser(string idToken, UserUpdatePayload payload) returns UserUpdateResponse|error {
+    return csEntityClient->/users/me.patch(payload, generateHeaders(idToken));
+}
+
 # Get project by ID.
 #
 # + idToken - ID token for authorization
@@ -39,6 +48,18 @@ public isolated function getProject(string idToken, string projectId) returns Pr
 # + return - Projects response or error
 public isolated function searchProjects(string idToken, ProjectSearchPayload payload) returns ProjectsResponse|error {
     return csEntityClient->/projects/search.post(payload, generateHeaders(idToken));
+}
+
+# Update a project.
+#
+# + idToken - ID token for authorization
+# + projectId - Unique ID of the project to be updated
+# + payload - Project update payload containing details to be updated in the project
+# + return - Project update response containing details of the updated project or error
+public isolated function updateProject(string idToken, string projectId, ProjectUpdatePayload payload)
+    returns ProjectUpdateResponse|error {
+
+    return csEntityClient->/projects/[projectId].patch(payload, generateHeaders(idToken));
 }
 
 # Get project activity statistics by ID.

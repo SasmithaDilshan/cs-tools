@@ -83,7 +83,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
     #
     # + return - User info object or error response
     resource function get users/me(http:RequestContext ctx)
-        returns types:User|http:Unauthorized|http:InternalServerError {
+        returns types:User|http:Unauthorized|http:NotFound|http:InternalServerError {
 
         authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
         if userInfo is error {
@@ -110,6 +110,14 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
                 return <http:Unauthorized>{
                     body: {
                         message: "Unauthorized access to the customer portal."
+                    }
+                };
+            }
+            if getStatusCode(userDetails) == http:STATUS_NOT_FOUND {
+                log:printWarn(string `User details not found for user: ${userInfo.userId}`);
+                return <http:NotFound>{
+                    body: {
+                        message: "Failed to retrieve user information."
                     }
                 };
             }
@@ -205,8 +213,31 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             updatedUserResponse.phoneNumber = scim:processPhoneNumber(updatedUser);
         }
 
-        if payload.timeZone is string {
-            // TODO: Update timezone
+        string? timeZone = payload.timeZone;
+        if timeZone is string {
+            entity:UserUpdateResponse|error response = entity:updateUser(userInfo.idToken, {timeZone});
+            if response is error {
+                if getStatusCode(response) == http:STATUS_BAD_REQUEST {
+                    return <http:BadRequest>{
+                        body: {
+                            message: "Invalid timezone key provided. Please provide a valid timezone key."
+                        }
+                    };
+                }
+
+                string customError = "Failed to update user timezone.";
+                log:printError(customError, response);
+                return <http:InternalServerError>{
+                    body: {
+                        message: customError
+                    }
+                };
+            }
+            error? cacheInvalidate = userCache.invalidate(string `${userInfo.email}:userinfo`);
+            if cacheInvalidate is error {
+                log:printWarn("Error invalidating user information from cache", cacheInvalidate);
+            }
+            updatedUserResponse.timeZone = timeZone;
         }
 
         return updatedUserResponse;
@@ -314,6 +345,61 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
         return mapProjectResponse(projectResponse);
+    }
+
+    # Update project details by ID.
+    # 
+    # + id - ID of the project
+    # + payload - Project update payload
+    # + return - Updated project details or error response
+    resource function patch projects/[entity:IdString id](http:RequestContext ctx, entity:ProjectUpdatePayload payload)
+        returns entity:UpdatedProject|http:BadRequest|http:Unauthorized|http:Forbidden|http:InternalServerError {
+
+        authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
+        if userInfo is error {
+            return <http:InternalServerError>{
+                body: {
+                    message: ERR_MSG_USER_INFO_HEADER_NOT_FOUND
+                }
+            };
+        }
+
+        entity:ProjectUpdateResponse|error response = entity:updateProject(userInfo.idToken, id, payload);
+        if response is error {
+            if getStatusCode(response) == http:STATUS_FORBIDDEN {
+                logForbiddenProjectAccess(id, userInfo.userId);
+                return <http:Forbidden>{
+                    body: {
+                        message: ERR_MSG_PROJECT_ACCESS_FORBIDDEN
+                    }
+                };
+            }
+            if getStatusCode(response) == http:STATUS_BAD_REQUEST {
+                return <http:BadRequest>{
+                    body: {
+                        message: "Invalid input provided for project update. Please check the payload and try again."
+                    }
+                };
+            }
+            if getStatusCode(response) == http:STATUS_UNAUTHORIZED {
+                log:printWarn(string `User: ${userInfo.userId} is not authorized to access the customer portal!`);
+                return <http:Unauthorized>{
+                    body: {
+                        message: ERR_MSG_UNAUTHORIZED_ACCESS
+                    }
+                };
+            }
+
+            string customError = "Failed to update the project.";
+            log:printError(customError, response);
+            return <http:InternalServerError>{
+                body: {
+                    message: customError
+                }
+            };
+        }
+
+        return response.project;
     }
 
     # Get deployments of a project by ID.
@@ -605,13 +691,23 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
+        entity:AttachmentUpdatePayload updatePayload = {
+            referenceId: deploymentId,
+            referenceType: entity:DEPLOYMENT,
+            name: payload?.name,
+            description: payload?.description
+        };
+        string? validateAttachmentUpdatePayload = entity:validateAttachmentUpdatePayload(updatePayload);
+        if validateAttachmentUpdatePayload is string {
+            return <http:BadRequest>{
+                body: {
+                    message: validateAttachmentUpdatePayload
+                }
+            };
+        }
+
         entity:AttachmentUpdateResponse|error response = entity:updateAttachment(userInfo.idToken, attachmentId,
-                {
-                    referenceId: deploymentId,
-                    referenceType: entity:DEPLOYMENT,
-                    name: payload?.name,
-                    description: payload?.description
-                });
+                updatePayload);
         if response is error {
             if getStatusCode(response) == http:STATUS_FORBIDDEN {
                 log:printWarn(string `User: ${userInfo.userId} is forbidden to update attachment with ID: ${
@@ -1813,12 +1909,22 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
+        entity:AttachmentUpdatePayload updatePayload = {
+            referenceId: caseId,
+            referenceType: entity:CASE,
+            name: payload?.name
+        };
+        string? validateAttachmentUpdatePayload = entity:validateAttachmentUpdatePayload(updatePayload);
+        if validateAttachmentUpdatePayload is string {
+            return <http:BadRequest>{
+                body: {
+                    message: validateAttachmentUpdatePayload
+                }
+            };
+        }
+
         entity:AttachmentUpdateResponse|error response = entity:updateAttachment(userInfo.idToken, attachmentId,
-                {
-                    referenceId: caseId,
-                    referenceType: entity:CASE,
-                    name: payload?.name
-                });
+                updatePayload);
         if response is error {
             if getStatusCode(response) == http:STATUS_UNAUTHORIZED {
                 log:printWarn(string `User: ${userInfo.userId} is not authorized to access the customer portal!`);

@@ -218,6 +218,8 @@ public type UpdatedUser record {|
 public type ProjectFilterOptions record {|
     # List of case states
     ReferenceItem[] caseStates;
+    # List of available time zones (eg: UTC, GMT, etc.)
+    ReferenceItem[] timeZones;
     # List of case severities
     ReferenceItem[] severities;
     # List of issue types
@@ -272,6 +274,8 @@ public type ProjectResponse record {|
     record {|
         # ID of the account
         entity:IdString id;
+        # Indicates whether the agent is enabled for the account
+        boolean hasAgent;
         # Name of the account
         string? name;
         # Activation date
@@ -286,7 +290,7 @@ public type ProjectResponse record {|
         string? ownerEmail;
         # Technical owner email
         string? technicalOwnerEmail;
-    |}? account;
+    |} account;
 |};
 
 # Projects response.

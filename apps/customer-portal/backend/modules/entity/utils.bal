@@ -247,3 +247,40 @@ public isolated function validateDeployedProductUpdatePayload(DeployedProductUpd
     }
     return;
 }
+
+# Validate attachment update payload.
+#
+# + payload - Attachment update payload
+# + return - Validation error message or null if valid
+public isolated function validateAttachmentUpdatePayload(AttachmentUpdatePayload payload) returns string? {
+    ReferenceType referenceType = payload.referenceType;
+    string? description = payload?.description;
+    string? name = payload?.name;
+
+    // Validate reference type
+    if referenceType != CASE && referenceType != DEPLOYMENT {
+        return string `Invalid type '${referenceType}'. Only 'case' and 'deployment' are allowed.`;
+    }
+
+    // If referenceType is CASE, name is required and description should not be present
+    if referenceType == CASE {
+        if description !is () {
+            return "Description field is not allowed for case type.";
+        }
+        if name is () || name.trim().length() == 0 {
+            return "Name field is required for case type.";
+        }
+    }
+
+    // If referenceType is DEPLOYMENT, at least one of name or description should be present
+    if referenceType == DEPLOYMENT {
+        boolean hasName = name !is () && name.trim().length() > 0;
+        boolean hasDescription = description !is () && description.trim().length() > 0;
+
+        if !hasName && !hasDescription {
+            return "At least one field (name or description) must be provided for deployment type.";
+        }
+    }
+
+    return;
+}

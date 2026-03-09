@@ -100,6 +100,8 @@ public isolated function getProjectFilters(entity:ProjectMetadataResponse projec
 
     types:ReferenceItem[] caseStates = from entity:ChoiceListItem item in projectMetadata.caseStates
         select {id: item.id.toString(), label: item.label};
+    types:ReferenceItem[] timeZones = from entity:ChoiceListItem item in projectMetadata.timeZones
+        select {id: item.id.toString(), label: item.label};
     types:ReferenceItem[] severities = from entity:ChoiceListItem item in projectMetadata.severities
         select {id: item.id.toString(), label: item.label};
     types:ReferenceItem[] issueTypes = from entity:ChoiceListItem item in projectMetadata.issueTypes
@@ -121,6 +123,7 @@ public isolated function getProjectFilters(entity:ProjectMetadataResponse projec
 
     return {
         caseStates,
+        timeZones,
         severities,
         issueTypes,
         deploymentTypes,
@@ -795,7 +798,7 @@ public isolated function mapProjectChangeRequestStatsResponse(entity:ProjectChan
 }
 
 # Map projects response to the desired structure.
-# 
+#
 # + response - Projects response from the entity service
 # + return - Mapped projects response
 public isolated function mapProjectsResponse(entity:ProjectsResponse response) returns types:ProjectsResponse {
@@ -827,16 +830,16 @@ public isolated function mapProjectResponse(entity:ProjectResponse response) ret
     hasSr: response.hasSr,
     startDate: response.startDate,
     endDate: response.endDate,
-    account: response.account != () ?
-        {
-            id: response.account?.id ?: "",
-            name: response.account?.name ?: "",
-            activationDate: response.account?.activationDate,
-            deactivationDate: response.account?.deactivationDate,
-            supportTier: response.account?.supportTier,
-            region: response.account?.region,
-            ownerEmail: response.account?.ownerEmail,
-            technicalOwnerEmail: response.account?.technicalOwnerEmail
-        } : ()
+    account: {
+        id: response.account.id,
+        hasAgent: response.account.hasAgent,
+        name: response.account.name,
+        activationDate: response.account.activationDate,
+        deactivationDate: response.account.deactivationDate,
+        supportTier: response.account.supportTier,
+        region: response.account.region,
+        ownerEmail: response.account.ownerEmail,
+        technicalOwnerEmail: response.account.technicalOwnerEmail
+    }
 };
 

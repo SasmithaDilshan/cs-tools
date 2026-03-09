@@ -66,6 +66,31 @@ public type UserResponse record {|
     json...;
 |};
 
+# Request payload for updating user.
+public type UserUpdatePayload record {|
+    # Time zone to update for the user
+    string timeZone;
+|};
+
+# Response payload for user update.
+public type UserUpdateResponse record {|
+    # Success message
+    string message;
+    # Updated user details
+    UpdatedUser user;
+|};
+
+# Updated user details.
+public type UpdatedUser record {|
+    # ID of the user
+    IdString id;
+    # User who performed the update
+    string updatedBy;
+    # Updated date and time
+    DateTimeWithoutTimezone updatedOn;
+    json...;
+|};
+
 # Project data.
 public type Project record {|
     # ID
@@ -119,6 +144,8 @@ public type ProjectResponse record {|
     record {|
         # ID of the account
         IdString id;
+        # Indicates whether the agent is enabled for the account
+        boolean hasAgent;
         # Name of the account
         string? name;
         # Activation date
@@ -134,7 +161,33 @@ public type ProjectResponse record {|
         # Technical owner email
         string? technicalOwnerEmail;
         json...;
-    |}? account;
+    |} account;
+    json...;
+|};
+
+# Payload for updating a project.
+public type ProjectUpdatePayload record {|
+    # Indicates whether the agent is enabled for the project
+    boolean hasAgent;
+|};
+
+# Response from updating a project.
+public type ProjectUpdateResponse record {|
+    # Success message
+    string message;
+    # Updated project metadata
+    UpdatedProject project;
+    json...;
+|};
+
+# Updated project details.
+public type UpdatedProject record {|
+    # ID of the project
+    IdString id;
+    # User who updated the project
+    string updatedBy;
+    # Updated date and time
+    DateTimeWithoutTimezone updatedOn;
     json...;
 |};
 
@@ -425,6 +478,8 @@ public type SortBy record {|
 public type ProjectMetadataResponse record {|
     # List of available case states (eg: Open, Closed, etc.)
     ChoiceListItem[] caseStates;
+    # List of available time zones (eg: UTC, GMT, etc.)
+    ChoiceListItem[] timeZones;
     # List of available case severities (eg: S0, S1, etc.)
     ChoiceListItem[] severities;
     # List of available issue types (eg: Error, Total Outage, etc.)
