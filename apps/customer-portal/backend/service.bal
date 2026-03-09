@@ -3660,6 +3660,19 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
+        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
+
+        // Only allow admins to create service tokens
+        if !isAdmin && payload.tokenType == registry:SERVICE_TOKEN {
+            log:printWarn(string `User: ${
+                    userInfo.userId} attempted to create a service token without admin privileges.`);
+            return <http:Forbidden>{
+                body: {
+                    message: "Only admins can create service tokens."
+                }
+            };
+        }
+
         entity:ProjectResponse|error projectResponse = entity:getProject(userInfo.idToken, id);
         if projectResponse is error {
             if getStatusCode(projectResponse) == http:STATUS_UNAUTHORIZED {
@@ -3696,16 +3709,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        entity:Account? account = projectResponse.account;
-        if account is () {
-            log:printError("Failed to retrieve account details for the project. Account details not found.");
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve account details for the project."
-                }
-            };
-        }
-        string? accountName = account.name;
+        string? accountName = projectResponse.account.name;
         if accountName is () {
             log:printError("Failed to retrieve account name for the project. Account name is missing.");
             return <http:InternalServerError>{
@@ -3715,19 +3719,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
-
-        // Only allow admins to create service tokens
-        if !isAdmin && payload.tokenType == registry:SERVICE_TOKEN  {
-            log:printWarn(string `User: ${
-                    userInfo.userId} attempted to create a service token without admin privileges.`);
-            return <http:Forbidden>{
-                body: {
-                    message: "Only admins can create service tokens."
-                }
-            };
-        }
-        
         // Default 'createdFor' to the requesting user's email for user tokens before any ownership checks.
         string? createdFor = payload.tokenType == registry:USER_TOKEN ? userInfo.email : payload.createdFor;
 
@@ -3737,7 +3728,8 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
                     userInfo.userId} attempted to create a service token without specifying 'createdFor' email.`);
             return <http:BadRequest>{
                 body: {
-                    message: "'createdFor' email must be specified when creating a service token."
+                    message: "Service tokens are created on behalf of an integration user. Please specify the" +
+                        " 'createdFor' email of the integration user this token is intended for."
                 }
             };
         }
@@ -3759,7 +3751,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
                     accountName,
                     projectKey: projectResponse.key,
                     robotName: payload.robotName,
-                    snAccountId: account.id,
+                    snAccountId: projectResponse.account.id,
                     tokenType: payload.tokenType,
                     createdBy: userInfo.email,
                     createdFor: createdFor.toString()
@@ -3857,22 +3849,12 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        entity:Account? account = projectResponse.account;
-        if account is () {
-            log:printError("Failed to retrieve account details for the project. Account details not found.");
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve account details for the project."
-                }
-            };
-        }
-
         boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
 
         registry:Token[]|error response = registry:searchTokens(
                 {
                     snProjectId: id,
-                    snAccountId: account.id,
+                    snAccountId: projectResponse.account.id,
                     isAdmin,
                     userEmail: isAdmin ? () : userInfo.email
                 }
@@ -3936,15 +3918,13 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
-
         registry:Token|error token = registry:getTokenById(id);
         if token is error {
             if getStatusCode(token) == http:STATUS_NOT_FOUND {
                 log:printWarn(string `Registry token with ID: ${id} not found for user: ${userInfo.userId}`);
                 return <http:NotFound>{
                     body: {
-                        message: "The registry token to be deleted is not found!"
+                        message: "The registry token is not found!"
                     }
                 };
             }
@@ -4001,9 +3981,11 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
+        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
+
         // Enforce that only admins can delete service tokens, and users can only delete their own tokens.
-        if !isAdmin && 
-            (tokenInformation.tokenType == registry:SERVICE_TOKEN  || tokenInformation.createdFor != userInfo.email) {
+        if !isAdmin &&
+            (tokenInformation.tokenType == registry:SERVICE_TOKEN || tokenInformation.createdFor != userInfo.email) {
 
             log:printWarn(string `User: ${
                     userInfo.userId} attempted to delete a service token without proper privileges`);
@@ -4019,7 +4001,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             if getStatusCode(response) == http:STATUS_NOT_FOUND {
                 return <http:NotFound>{
                     body: {
-                        message: "The registry token to be deleted is not found!"
+                        message: "The registry token is not found!"
                     }
                 };
             }
@@ -4086,15 +4068,13 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
-        
         registry:Token|error token = registry:getTokenById(id);
         if token is error {
             if getStatusCode(token) == http:STATUS_NOT_FOUND {
                 log:printWarn(string `Registry token with ID: ${id} not found for user: ${userInfo.userId}`);
                 return <http:NotFound>{
                     body: {
-                        message: "The registry token to be deleted is not found!"
+                        message: "The registry token is not found!"
                     }
                 };
             }
@@ -4151,9 +4131,11 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
+        boolean isAdmin = authorization:checkRoles([authorization:adminRole], userDetails.roles);
+
         // Enforce that only admins can delete service tokens, and users can only delete their own tokens.
-        if !isAdmin && 
-            (tokenInformation.tokenType == registry:SERVICE_TOKEN  || tokenInformation.createdFor != userInfo.email) {
+        if !isAdmin &&
+            (tokenInformation.tokenType == registry:SERVICE_TOKEN || tokenInformation.createdFor != userInfo.email) {
 
             log:printWarn(string `User: ${
                     userInfo.userId} attempted to delete a service token without proper privileges`);
@@ -4196,7 +4178,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
     #
     # + id - ID of the project
     # + return - List of integration users or error
-    isolated resource function get projects/[string id]/integration\-users(http:RequestContext ctx)
+    isolated resource function get projects/[entity:IdString id]/integration\-users(http:RequestContext ctx)
         returns registry:IntegrationUser[]|http:Unauthorized|http:Forbidden|http:NotFound|
             http:InternalServerError {
 

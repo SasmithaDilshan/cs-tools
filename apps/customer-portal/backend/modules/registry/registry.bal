@@ -27,7 +27,6 @@ public isolated function createToken(TokenCreatePayload payload) returns TokenCr
 # + payload - Registry token search payload
 # + return - List of registry tokens matching the search criteria or an error
 public isolated function searchTokens(TokenSearchPayload payload) returns Token[]|error {
-
     return registryClient->/robot\-accounts/search.post(payload);
 }
 

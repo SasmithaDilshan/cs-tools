@@ -141,7 +141,7 @@ public type ProjectResponse record {|
     # Project end date 
     Date? endDate;
     # Account information
-    Account? account;
+    Account account;
     json...;
 |};
 
@@ -149,6 +149,8 @@ public type ProjectResponse record {|
 public type Account record {|
     # ID of the account
     IdString id;
+    # Indicates whether the agent is enabled for the account
+    boolean hasAgent;
     # Name of the account
     string? name;
     # Activation date
