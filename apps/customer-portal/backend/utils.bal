@@ -60,6 +60,7 @@ public isolated function searchCases(string idToken, string projectId, types:Cas
         let entity:ReferenceTableItem? catalog = case.catalog
         let entity:ReferenceTableItem? catalogItem = case.catalogItem
         let entity:ReferenceTableItem? assignedTeam = case.assignedTeam
+        let entity:ReferenceTableItem? product = case.product
         select {
             id: case.id,
             internalId: case.internalId,
@@ -80,7 +81,8 @@ public isolated function searchCases(string idToken, string projectId, types:Cas
             status: state != () ? {id: state.id.toString(), label: state.label} : (),
             catalog: catalog != () ? {id: catalog.id, label: catalog.name} : (),
             catalogItem: catalogItem != () ? {id: catalogItem.id, label: catalogItem.name} : (),
-            assignedTeam: assignedTeam != () ? {id: assignedTeam.id, label: assignedTeam.name} : ()
+            assignedTeam: assignedTeam != () ? {id: assignedTeam.id, label: assignedTeam.name} : (),
+            product: product != () ? {id: product.id, label: product.name} : ()
         };
 
     return {
@@ -516,6 +518,7 @@ public isolated function mapCaseResponse(entity:CaseResponse response) returns t
     entity:ReferenceTableItem? assignedTeam = response.assignedTeam;
     entity:ReferenceTableItem[]? changeRequests = response?.changeRequests;
     entity:ServiceRequestVariable[]? variables = response?.variables;
+    entity:ReferenceTableItem? product = response.product;
 
     return {
         id: response.id,
@@ -537,6 +540,7 @@ public isolated function mapCaseResponse(entity:CaseResponse response) returns t
         catalog: catalog != () ? {id: catalog.id, label: catalog.name} : (),
         catalogItem: catalogItem != () ? {id: catalogItem.id, label: catalogItem.name} : (),
         assignedTeam: assignedTeam != () ? {id: assignedTeam.id, label: assignedTeam.name} : (),
+        product: product != () ? {id: product.id, label: product.name} : (),
         updatedOn: response.updatedOn,
         deployedProduct: response.deployedProduct != () ? {
                 id: response.deployedProduct?.id ?: "",

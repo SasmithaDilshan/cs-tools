@@ -88,6 +88,8 @@ public type Case record {|
     ReferenceItem? catalogItem;
     # Assigned team
     ReferenceItem? assignedTeam;
+    # Product information
+    ReferenceItem? product;
 |};
 
 # Case information.

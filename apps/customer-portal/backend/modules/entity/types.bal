@@ -318,6 +318,8 @@ public type Case record {|
     ReferenceTableItem? catalogItem;
     # Assigned team
     ReferenceTableItem? assignedTeam;
+    # WSO2 product information
+    ReferenceTableItem? product;
     json...;
 |};
 
