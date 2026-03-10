@@ -1265,7 +1265,7 @@ export function getAvailableCaseActions(
       return ["Open Related Case"];
 
     case CaseStatus.SOLUTION_PROPOSED.toLowerCase():
-      return ["Closed", "Accept Solution", "Reject Solution"];
+      return ["Accept Solution", "Reject Solution"];
 
     case CaseStatus.AWAITING_INFO.toLowerCase():
       return ["Closed", "Waiting on WSO2"];
