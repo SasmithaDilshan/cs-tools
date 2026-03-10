@@ -111,7 +111,6 @@ export default function NoveraChatPage(): JSX.Element {
   const [isWaitingForClassification, setIsWaitingForClassification] =
     useState(false);
   const [messages, setMessages] = useState<Message[]>(() => {
-    
     if (urlConversationId) {
       return [];
     }
@@ -399,8 +398,12 @@ export default function NoveraChatPage(): JSX.Element {
           overflow: "visible",
         }}
       >
-        <Box sx={{ mt: -3, mx: -3 }}>
-          <ChatHeader onBack={handleBack} />
+        <Box sx={{ mt: -1.5, mx: -3 }}>
+          <ChatHeader
+            onBack={handleBack}
+            onCreateCase={handleCreateCase}
+            isCreateCaseLoading={isCreateCaseLoading}
+          />
         </Box>
 
         {/* Chat window */}
@@ -419,7 +422,6 @@ export default function NoveraChatPage(): JSX.Element {
               messages={messages}
               messagesEndRef={messagesEndRef}
               onCreateCase={handleCreateCase}
-              isCreateCaseLoading={isCreateCaseLoading}
             />
           )}
 
@@ -429,6 +431,8 @@ export default function NoveraChatPage(): JSX.Element {
             onSend={handleSendMessage}
             inputValue={inputValue}
             setInputValue={setInputValueAndRef}
+            onCreateCase={handleCreateCase}
+            isCreateCaseLoading={isCreateCaseLoading}
             isSending={isSending || isLoadingHistory}
             resetTrigger={resetTrigger}
           />

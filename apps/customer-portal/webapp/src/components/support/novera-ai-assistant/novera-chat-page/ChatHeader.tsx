@@ -14,62 +14,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { Box, Button, Typography, Paper } from "@wso2/oxygen-ui";
-import { Bot, ArrowLeft } from "@wso2/oxygen-ui-icons-react";
+import { Button } from "@wso2/oxygen-ui";
+import { ArrowLeft } from "@wso2/oxygen-ui-icons-react";
 import { type JSX } from "react";
 
 interface ChatHeaderProps {
   onBack: () => void;
+  onCreateCase?: () => void;
+  isCreateCaseLoading?: boolean;
 }
 
 /**
  * Renders the header section for the Novera Chat page.
  *
- * Includes navigation controls such as the back action.
+ * Includes navigation controls such as the back action and Create Case button.
  *
  * @returns The ChatHeader JSX element.
  */
 export default function ChatHeader({ onBack }: ChatHeaderProps): JSX.Element {
   return (
-    <Paper
-      variant="outlined"
-      sx={{
-        p: 2,
-        mb: 3,
-        flexShrink: 0,
-        borderRadius: 0,
-      }}
-    >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-        <Button
-          onClick={onBack}
-          sx={{ minWidth: "auto", p: 1 }}
-          variant="text"
-          aria-label="Back"
-        >
-          <ArrowLeft size={18} />
-        </Button>
-
-        <Box
-          sx={{
-            width: (theme) => theme.spacing(5),
-            height: (theme) => theme.spacing(5),
-            bgcolor: "primary.main",
-            borderRadius: "50%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Bot size={20} color="white" />
-        </Box>
-        <Box>
-          <Typography variant="h6">Chat with Novera</Typography>
-          <Typography variant="body2" color="text.secondary">
-            AI-powered support assistant
-          </Typography>
-        </Box>
-      </Box>
-    </Paper>
+    <>
+      <Button
+        startIcon={<ArrowLeft size={18} />}
+        onClick={onBack}
+        sx={{
+          mb: 1.5,
+          textTransform: "none",
+          alignSelf: "flex-start",
+          flexShrink: 0,
+          mx: 3,
+        }}
+        variant="text"
+      >
+        Back
+      </Button>
+    </>
   );
 }

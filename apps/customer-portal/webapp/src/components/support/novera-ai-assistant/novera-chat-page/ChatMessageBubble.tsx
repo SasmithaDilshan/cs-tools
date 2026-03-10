@@ -14,19 +14,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import {
-  Box,
-  Button,
-  CircularProgress,
-  Paper,
-  Typography,
-} from "@wso2/oxygen-ui";
-import { Bot, FileText, User } from "@wso2/oxygen-ui-icons-react";
+import { Box, Paper, Typography, IconButton } from "@wso2/oxygen-ui";
+import { Bot, User, ThumbsUp, ThumbsDown } from "@wso2/oxygen-ui-icons-react";
 import ReactMarkdown from "react-markdown";
-import { type JSX } from "react";
+import { type JSX, useState } from "react";
 import type { Message } from "@pages/NoveraChatPage";
 import RecommendationsCard from "@components/support/novera-ai-assistant/novera-chat-page/RecommendationsCard";
-import { AVATAR_ICON_COLOR } from "./chatConstants";
 
 /** Safe URL protocols for markdown links. Blocks javascript:, data:, etc. */
 const SAFE_PROTOCOLS = ["http:", "https:"];
@@ -44,7 +37,8 @@ function isSafeHref(href: string | undefined): href is string {
 interface ChatMessageBubbleProps {
   message: Message;
   onCreateCase?: () => void;
-  isCreateCaseLoading?: boolean;
+  onThumbsUp?: (messageId: string) => void;
+  onThumbsDown?: (messageId: string) => void;
 }
 
 /** Typography mapping for markdown elements (bot messages). */
@@ -137,10 +131,12 @@ const markdownComponents: React.ComponentProps<
  */
 export default function ChatMessageBubble({
   message,
-  onCreateCase,
-  isCreateCaseLoading = false,
+  onThumbsUp,
+  onThumbsDown,
 }: ChatMessageBubbleProps): JSX.Element {
   const isUser = message.sender === "user";
+  const [thumbsState, setThumbsState] = useState<"up" | "down" | null>(null);
+  const hasFeedbackSelection = thumbsState !== null;
 
   const displayText = message.isError ? "Something went wrong" : message.text;
 
@@ -163,135 +159,161 @@ export default function ChatMessageBubble({
     // formattedTime remains "--"
   }
 
-  const avatarIcon = (
-    <Paper
-      sx={{
-        width: (theme) => theme.spacing(4),
-        height: (theme) => theme.spacing(4),
-        borderRadius: "50%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      {isUser ? (
-        <User size={16} color={AVATAR_ICON_COLOR} />
-      ) : (
-        <Bot size={16} color={AVATAR_ICON_COLOR} />
-      )}
-    </Paper>
-  );
-
-  return (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: isUser ? "row-reverse" : "row",
-        gap: 1.5,
-        alignItems: isUser ? "flex-end" : "flex-start",
-      }}
-    >
-      {avatarIcon}
-      <Box sx={{ maxWidth: "80%" }}>
-        <Paper
-          sx={{
-            p: 2,
-            bgcolor: isUser ? "primary.main" : "background.paper",
-            color: isUser ? "common.white" : "text.primary",
-            borderRadius: (theme) =>
-              isUser
-                ? `${theme.spacing(2)} ${theme.spacing(2)} ${theme.spacing(0.5)} ${theme.spacing(2)}`
-                : `${theme.spacing(0.5)} ${theme.spacing(2)} ${theme.spacing(2)} ${theme.spacing(2)}`,
-            boxShadow: "none",
-            border: "1px solid",
-            borderColor: isUser ? "primary.main" : "divider",
-          }}
-        >
-          {isUser ? (
+  if (isUser) {
+    // User message with avatar
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 1.5,
+          alignItems: "flex-end",
+        }}
+      >
+        <Box sx={{ maxWidth: "80%" }}>
+          <Paper
+            sx={{
+              p: 2,
+              bgcolor: "action.hover",
+              color: "text.primary",
+              borderRadius: (theme) =>
+                `${theme.spacing(2)} ${theme.spacing(2)} ${theme.spacing(0.5)} ${theme.spacing(2)}`,
+              boxShadow: "none",
+              border: "1px solid",
+              borderColor: "divider",
+            }}
+          >
             <Typography variant="body2" sx={{ whiteSpace: "pre-line" }}>
               {displayText}
             </Typography>
-          ) : message.isError ? (
-            <Typography variant="body2" color="error.main">
-              {displayText}
-            </Typography>
-          ) : (
-            <Box
-              sx={{
-                "& h1:first-of-type, & h2:first-of-type, & h3:first-of-type, & p:first-of-type":
-                  { mt: 0 },
-              }}
-            >
-              <ReactMarkdown components={markdownComponents}>
-                {displayText}
-              </ReactMarkdown>
-            </Box>
-          )}
-          {!isUser &&
-            (message.showCreateCaseAction || message.isError) &&
-            onCreateCase &&
-            (isCreateCaseLoading ? (
-              <Box
-                sx={{ mt: 2, display: "flex", alignItems: "center", gap: 1 }}
-              >
-                <Button
-                  variant="outlined"
-                  size="small"
-                  color="warning"
-                  disabled
-                  startIcon={<CircularProgress color="inherit" size={14} />}
-                >
-                  Processing
-                </Button>
-                <Typography variant="caption" color="text.secondary">
-                  Skip the chat and create a support case now
-                </Typography>
-              </Box>
-            ) : (
-              <Box
-                sx={{
-                  mt: 2,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  flexWrap: "wrap",
-                }}
-              >
-                <Button
-                  variant="outlined"
-                  size="small"
-                  color="warning"
-                  onClick={onCreateCase}
-                  startIcon={<FileText size={14} />}
-                >
-                  Create Case
-                </Button>
-                <Typography variant="caption" color="text.secondary">
-                  Skip the chat and create a support case now
-                </Typography>
-              </Box>
-            ))}
-        </Paper>
-
-        {!isUser &&
-          message.recommendations &&
-          message.recommendations.length > 0 && (
-            <RecommendationsCard recommendations={message.recommendations} />
-          )}
-
-        <Box
+          </Paper>
+        </Box>
+        <Paper
           sx={{
-            mt: 0.5,
+            width: (theme) => theme.spacing(4),
+            height: (theme) => theme.spacing(4),
+            borderRadius: "50%",
             display: "flex",
-            justifyContent: isUser ? "flex-end" : "flex-start",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            bgcolor: "primary.lighter",
+            color: "primary.main",
           }}
         >
-          <Typography variant="caption" color="text.secondary">
-            {formattedTime}
+          <User size={16} />
+        </Paper>
+      </Box>
+    );
+  }
+
+  // Bot message - new custom layout
+  return (
+    <Box sx={{ maxWidth: "80%" }}>
+      <Box sx={{ mb: 3 }}>
+        {/* Header with icon and Novera label */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
+          <Box
+            sx={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #EA580C 0%, #F97316 100%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Bot size={16} color="white" />
+          </Box>
+          <Typography
+            variant="body2"
+            sx={{ fontWeight: 600, color: "text.primary" }}
+          >
+            Novera
           </Typography>
         </Box>
+
+        {/* Message content */}
+        {message.isError ? (
+          <Typography variant="body2" color="error.main">
+            {displayText}
+          </Typography>
+        ) : (
+          <Box
+            sx={{
+              "& h1:first-of-type, & h2:first-of-type, & h3:first-of-type, & p:first-of-type":
+                { mt: 0 },
+            }}
+            className="prose prose-sm max-w-none text-gray-800"
+          >
+            <ReactMarkdown components={markdownComponents}>
+              {displayText}
+            </ReactMarkdown>
+          </Box>
+        )}
+
+        {/* Thumbs up/down and time - only if no recommendations */}
+        {(!message.recommendations || message.recommendations.length === 0) && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 3, mt: 3 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <IconButton
+                size="small"
+                onClick={() => {
+                  if (hasFeedbackSelection) return;
+                  setThumbsState("up");
+                  onThumbsUp?.(message.id);
+                }}
+                aria-pressed={thumbsState === "up"}
+                sx={{
+                  p: 0.5,
+                  color:
+                    thumbsState === "up" ? "success.main" : "text.secondary",
+                  "&:hover": {
+                    color: "success.main",
+                    bgcolor: "success.lighter",
+                  },
+                }}
+                aria-label="Like this response"
+              >
+                <ThumbsUp size={14} />
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => {
+                  if (hasFeedbackSelection) return;
+                  setThumbsState("down");
+                  onThumbsDown?.(message.id);
+                }}
+                aria-pressed={thumbsState === "down"}
+                sx={{
+                  p: 0.5,
+                  color:
+                    thumbsState === "down" ? "error.main" : "text.secondary",
+                  "&:hover": {
+                    color: "error.main",
+                    bgcolor: "error.lighter",
+                  },
+                }}
+                aria-label="Dislike this response"
+              >
+                <ThumbsDown size={14} />
+              </IconButton>
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              {formattedTime}
+            </Typography>
+          </Box>
+        )}
       </Box>
+
+      {/* Recommendations - shown after message content */}
+      {!isUser &&
+        message.recommendations &&
+        message.recommendations.length > 0 && (
+          <RecommendationsCard recommendations={message.recommendations} />
+        )}
     </Box>
   );
 }

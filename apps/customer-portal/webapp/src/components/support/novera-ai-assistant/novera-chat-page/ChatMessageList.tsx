@@ -24,7 +24,8 @@ interface ChatMessageListProps {
   messages: Message[];
   messagesEndRef: RefObject<HTMLDivElement | null>;
   onCreateCase?: () => void;
-  isCreateCaseLoading?: boolean;
+  onThumbsUp?: (messageId: string) => void;
+  onThumbsDown?: (messageId: string) => void;
 }
 
 /**
@@ -39,7 +40,8 @@ export default function ChatMessageList({
   messages,
   messagesEndRef,
   onCreateCase,
-  isCreateCaseLoading = false,
+  onThumbsUp,
+  onThumbsDown,
 }: ChatMessageListProps): JSX.Element {
   return (
     <Box
@@ -60,7 +62,8 @@ export default function ChatMessageList({
             key={msg.id}
             message={msg}
             onCreateCase={onCreateCase}
-            isCreateCaseLoading={isCreateCaseLoading}
+            onThumbsUp={onThumbsUp}
+            onThumbsDown={onThumbsDown}
           />
         ),
       )}
