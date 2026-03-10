@@ -33,7 +33,7 @@ import { type JSX, type ChangeEvent } from "react";
 interface ProductVulnerabilitiesTableHeaderProps {
   searchValue: string;
   onSearchChange: (value: string) => void;
-  onFilterToggle?: () => void;
+  onFilterToggle: () => void;
   isFiltersOpen: boolean;
   activeFiltersCount: number;
 }
