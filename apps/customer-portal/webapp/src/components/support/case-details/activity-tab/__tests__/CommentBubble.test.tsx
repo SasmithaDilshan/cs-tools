@@ -39,7 +39,6 @@ function renderBubble(
   props: {
     comment?: CaseComment;
     isCurrentUser?: boolean;
-    isSupportEngineer?: boolean;
     primaryBg?: string;
     userDetails?: {
       email?: string;
@@ -51,7 +50,6 @@ function renderBubble(
   const defaults = {
     comment: mockComment,
     isCurrentUser: false,
-    isSupportEngineer: false,
     primaryBg: "rgba(250,123,63,0.1)",
   };
   return render(
@@ -72,16 +70,6 @@ describe("CommentBubble", () => {
   it("should show display name for non-current-user comment", () => {
     renderBubble({ isCurrentUser: false });
     expect(screen.getByText("support-engineer@wso2.com")).toBeInTheDocument();
-  });
-
-  it("should show Support Engineer chip for non-current-user", () => {
-    renderBubble({ isCurrentUser: false, isSupportEngineer: true });
-    expect(screen.getByText("Support Engineer")).toBeInTheDocument();
-  });
-
-  it("should not show Support Engineer chip for current user", () => {
-    renderBubble({ isCurrentUser: true, isSupportEngineer: true });
-    expect(screen.queryByText("Support Engineer")).not.toBeInTheDocument();
   });
 
   it("should render formatted date", () => {
