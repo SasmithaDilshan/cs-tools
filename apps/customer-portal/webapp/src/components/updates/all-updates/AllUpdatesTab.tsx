@@ -235,7 +235,7 @@ export default function AllUpdatesTab(): JSX.Element {
         startingUpdateLevel: String(searchParams.startingUpdateLevel),
         endingUpdateLevel: String(searchParams.endingUpdateLevel),
       });
-      navigate(`/${projectId}/updates/pending/level/${levelKey}?${params}`);
+      navigate(`/projects/${projectId}/updates/pending/level/${levelKey}?${params}`);
     },
     [navigate, projectId, searchParams],
   );

@@ -98,7 +98,7 @@ export function UpdateProductGrid({
                           startingUpdateLevel: String(item.startingUpdateLevel),
                           endingUpdateLevel: String(item.recommendedUpdateLevel),
                         });
-                        navigate(`/${projectId}/updates/pending?${params}`);
+                        navigate(`/projects/${projectId}/updates/pending?${params}`);
                       }
                     : undefined
                 }
