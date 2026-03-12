@@ -1,10 +1,10 @@
-name: Playwright E2E Tests
+name: END TO END TESTS
 
 on:
   push:
     branches:
-      - add-e2e-ui-testing-workflows # This will trigger the run automatically
-  workflow_dispatch: # This will work only after merging to main
+      - customer-portal-milestone-1
+  workflow_dispatch: 
 
 jobs:
   e2e:
@@ -62,7 +62,7 @@ jobs:
         run: pnpm run test:e2e
 
       - name: Upload Playwright artifacts
-        if: always() # Changed to 'always' so you can see results even if it passes
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
