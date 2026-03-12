@@ -825,17 +825,15 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        int totalChangeReqCount = 0;
         entity:ProjectChangeRequestStatsResponse|error changeReqStats =
             entity:getProjectChangeRequestStats(userInfo.idToken, id);
         if changeReqStats is error {
             log:printError("Failed to retrieve change request statistics.", changeReqStats);
             // To return other stats even if change request stats retrieval fails, error will not be returned.
-        } else {
-            totalChangeReqCount = changeReqStats.totalCount;
         }
 
-        return mapCaseStats(caseStats, totalChangeReqCount);
+        return mapCaseStats(caseStats,
+                    changeReqStats is entity:ProjectChangeRequestStatsResponse ? changeReqStats.totalCount : ());
     }
 
     # Get conversation statistics for a project by ID.

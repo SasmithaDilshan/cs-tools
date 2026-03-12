@@ -334,8 +334,8 @@ public type ProjectsResponse record {|
 public type ProjectCaseStats record {|
     # Total interaction count
     int totalInteractions;
-    # Total support cases count(last 30d)
-    int totalSupportCases;
+    # Total cases count(last 30d)
+    int totalCases;
     # Active case count (cases that are not in closed state)
     int activeCount;
     # Outstanding case count (cases that are not solution proposed or closed)

@@ -392,7 +392,7 @@ public isolated function mapCaseStats(entity:ProjectCaseStatsResponse response, 
 
     return {
         totalInteractions: response.totalCount + (changeReqStats ?: 0),
-        totalSupportCases: response.totalCount,
+        totalCases: response.totalCount,
         averageResponseTime: response.averageResponseTime,
         resolvedCases: response.resolvedCount,
         changeRate: response.changeRate,
