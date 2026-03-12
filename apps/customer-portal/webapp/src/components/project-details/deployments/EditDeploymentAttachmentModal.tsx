@@ -154,7 +154,13 @@ export default function EditDeploymentAttachmentModal({
     >
       <DialogTitle
         id="edit-deployment-attachment-dialog-title"
-        sx={{ pr: 6, position: "relative" }}
+        sx={{
+          pr: 6,
+          position: "relative",
+          textTransform: "capitalize",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
       >
         Edit Document
         <IconButton
@@ -167,8 +173,8 @@ export default function EditDeploymentAttachmentModal({
           <X size={20} aria-hidden />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ pt: 1 }}>
-        <Box sx={{ mt: 0, mb: 2 }}>
+      <DialogContent sx={{ pt: 2, pb: 1 }}>
+        <Box sx={{ mt: 2, mb: 2 }}>
           <TextField
             id="edit-document-name"
             label="Document Name"
@@ -180,20 +186,23 @@ export default function EditDeploymentAttachmentModal({
             disabled={isSubmitting}
           />
         </Box>
-        <TextField
-          id="edit-document-description"
-          label="Description"
-          placeholder="Add a short description..."
-          value={description}
-          onChange={handleDescriptionChange}
-          fullWidth
-          size="small"
-          multiline
-          rows={3}
-          disabled={isSubmitting}
-        />
+        <Box sx={{ mt: 2, mb: 2 }}>
+          <TextField
+            id="edit-document-description"
+            label="Description"
+            placeholder="Add a short description..."
+            value={description}
+            onChange={handleDescriptionChange}
+            fullWidth
+            size="small"
+            multiline
+            rows={3}
+            disabled={isSubmitting}
+            sx={{ mt: 2 }}
+          />
+        </Box>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2, pt: 1 }}>
+      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5 }}>
         <Button onClick={handleClose} disabled={isSubmitting}>
           Cancel
         </Button>

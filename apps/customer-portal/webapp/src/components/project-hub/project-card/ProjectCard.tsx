@@ -56,7 +56,7 @@ export default function ProjectCard({
     if (onViewDashboard) {
       onViewDashboard();
     } else {
-      navigate(`/${id}/dashboard`);
+      navigate(`/projects/${id}/dashboard`);
     }
   };
 
