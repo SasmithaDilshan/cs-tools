@@ -358,7 +358,7 @@ export default function UpdateLevelDetailsPage(): JSX.Element {
         startingUpdateLevel: String(startingUpdateLevel),
         endingUpdateLevel: String(endingUpdateLevel),
       });
-      navigate(`/${projectId}/updates/pending?${params}`);
+      navigate(`/projects/${projectId}/updates/pending?${params}`);
     } else {
       navigate(-1);
     }

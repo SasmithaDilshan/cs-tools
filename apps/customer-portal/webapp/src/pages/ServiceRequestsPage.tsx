@@ -216,7 +216,7 @@ export default function ServiceRequestsPage(): JSX.Element {
   };
 
   const handleNewServiceRequest = () => {
-    navigate(`/${projectId}/support/service-requests/create`);
+    navigate(`/projects/${projectId}/support/service-requests/create`);
   };
 
   if (isCasesQueryError) {
@@ -310,7 +310,7 @@ export default function ServiceRequestsPage(): JSX.Element {
         serviceRequests={paginatedServiceRequests}
         isLoading={isCasesAreaLoading}
         onServiceRequestClick={(sr) =>
-          navigate(`/${projectId}/support/service-requests/${sr.id}`)
+          navigate(`/projects/${projectId}/support/service-requests/${sr.id}`)
         }
       />
 

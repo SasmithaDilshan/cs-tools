@@ -16,14 +16,12 @@
 
 import { useParams, useNavigate } from "react-router";
 import { useEffect, type JSX } from "react";
-import { Box, Grid, Stack } from "@wso2/oxygen-ui";
+import { Grid, Stack } from "@wso2/oxygen-ui";
 import { FileText, MessageSquare } from "@wso2/oxygen-ui-icons-react";
 import { useAsgardeo } from "@asgardeo/react";
 import CasesOverviewStatCard from "@components/support/cases-overview-stats/CasesOverviewStatCard";
 import SupportOverviewCard from "@components/support/support-overview-cards/SupportOverviewCard";
 import OutstandingCasesList from "@components/support/support-overview-cards/OutstandingCasesList";
-import ServiceRequestCard from "@components/support/request-cards/ServiceRequestCard";
-import ChangeRequestCard from "@components/support/request-cards/ChangeRequestCard";
 import ChatHistoryList from "@components/support/support-overview-cards/ChatHistoryList";
 import { useGetProjectSupportStats } from "@api/useGetProjectSupportStats";
 import useGetProjectDetails from "@api/useGetProjectDetails";
@@ -172,7 +170,7 @@ export default function SupportPage(): JSX.Element {
               isLoading={isCasesLoading}
               onCaseClick={
                 projectId
-                  ? (c) => navigate(`/${projectId}/support/cases/${c.id}`)
+                  ? (c) => navigate(`/projects/${projectId}/support/cases/${c.id}`)
                   : undefined
               }
             />
@@ -211,7 +209,7 @@ export default function SupportPage(): JSX.Element {
                       }
 
                       if (action === "resume") {
-                        navigate(`/${projectId}/support/chat/${chatId}`);
+                        navigate(`/projects/${projectId}/support/chat/${chatId}`);
                       } else {
                         navigate(
                           `/${projectId}/support/conversations/${chatId}`,
@@ -227,18 +225,6 @@ export default function SupportPage(): JSX.Element {
           </SupportOverviewCard>
         </Grid>
       </Grid>
-      {isProjectLoaded && isManagedCloudSubscription && (
-        <Box sx={{ mt: 3 }}>
-          <Grid container spacing={2}>
-            <Grid size={{ xs: 12, lg: 6 }}>
-              <ServiceRequestCard />
-            </Grid>
-            <Grid size={{ xs: 12, lg: 6 }}>
-              <ChangeRequestCard />
-            </Grid>
-          </Grid>
-        </Box>
-      )}
     </Stack>
   );
 }
