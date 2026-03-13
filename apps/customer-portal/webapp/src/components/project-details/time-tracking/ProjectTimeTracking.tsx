@@ -23,33 +23,21 @@ import {
   type ChangeEvent,
 } from "react";
 import useSearchProjectTimeCards from "@api/useSearchProjectTimeCards";
-import useGetTimeCardsStats from "@api/useGetTimeCardsStats";
 import useGetProjectFilters from "@api/useGetProjectFilters";
-import TimeTrackingStatCards from "@time-tracking/TimeTrackingStatCards";
+import ServiceHoursStatCards from "@time-tracking/ServiceHoursStatCards";
 import TimeCardsDateFilter from "@time-tracking/TimeCardsDateFilter";
 import TimeTrackingCard from "@time-tracking/TimeTrackingCard";
 import TimeTrackingCardSkeleton from "@time-tracking/TimeTrackingCardSkeleton";
 import TimeTrackingErrorState from "@time-tracking/TimeTrackingErrorState";
 import EmptyState from "@components/common/empty-state/EmptyState";
 
+import type { ProjectDetails } from "@models/responses";
+
 interface ProjectTimeTrackingProps {
   projectId: string;
-}
-
-/** Format date as YYYY-MM-DD for API. */
-function formatDateForApi(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Default start: 12 months ago; default end: today. */
-function getDefaultDateRange(): { startDate: string; endDate: string } {
-  const end = new Date();
-  const start = new Date();
-  start.setFullYear(start.getFullYear() - 1);
-  return {
-    startDate: formatDateForApi(start),
-    endDate: formatDateForApi(end),
-  };
+  project?: ProjectDetails | null;
+  isProjectLoading?: boolean;
+  isProjectError?: boolean;
 }
 
 /**
@@ -60,13 +48,12 @@ function getDefaultDateRange(): { startDate: string; endDate: string } {
  */
 export default function ProjectTimeTracking({
   projectId,
+  project,
+  isProjectLoading,
+  isProjectError,
 }: ProjectTimeTrackingProps): JSX.Element {
-  const { startDate: defaultStart, endDate: defaultEnd } = useMemo(
-    () => getDefaultDateRange(),
-    [],
-  );
-  const [startDate, setStartDate] = useState(defaultStart);
-  const [endDate, setEndDate] = useState(defaultEnd);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [approvedStateId, setApprovedStateId] = useState<string | undefined>(
     undefined,
   );
@@ -87,16 +74,6 @@ export default function ProjectTimeTracking({
       }
     }
   }, [filters, approvedStateId]);
-
-  const {
-    data: stats,
-    isLoading: isStatsLoading,
-    isError: isStatsError,
-  } = useGetTimeCardsStats({
-    projectId,
-    startDate,
-    endDate,
-  });
 
   const {
     data,
@@ -144,12 +121,19 @@ export default function ProjectTimeTracking({
     setPage(value);
   };
 
+  const handleClearDates = () => {
+    setStartDate("");
+    setEndDate("");
+  };
+
+  const hasDateFilters = Boolean(startDate && endDate);
+
   return (
     <Box>
-      <TimeTrackingStatCards
-        stats={stats}
-        isLoading={isStatsLoading}
-        isError={isStatsError}
+      <ServiceHoursStatCards
+        project={project}
+        isLoading={isProjectLoading}
+        isError={isProjectError}
       />
 
       <Box sx={{ mb: 3 }}>
@@ -158,6 +142,8 @@ export default function ProjectTimeTracking({
           endDate={endDate}
           onStartDateChange={setStartDate}
           onEndDateChange={setEndDate}
+          onClear={handleClearDates}
+          hasFilters={hasDateFilters}
         />
       </Box>
 
