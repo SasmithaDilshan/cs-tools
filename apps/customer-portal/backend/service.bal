@@ -833,7 +833,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
         }
 
         return mapCaseStats(caseStats,
-                    changeReqStats is entity:ProjectChangeRequestStatsResponse ? changeReqStats.totalCount : ());
+                    changeReqStats is entity:ProjectChangeRequestStatsResponse ? changeReqStats : ());
     }
 
     # Get conversation statistics for a project by ID.

@@ -370,10 +370,10 @@ public isolated function mapProductVulnerabilityMetadataResponse(entity:Vulnerab
 # Map project case stats response to the desired structure.
 #
 # + response - Project case stats response from the entity service
-# + changeReqStats - Count of change requests to be added to total interactions
+# + changeReqStats - Change request stats to be added to total interactions and active count
 # + return - Mapped project case stats response
-public isolated function mapCaseStats(entity:ProjectCaseStatsResponse response, int? changeReqStats)
-    returns types:ProjectCaseStats {
+public isolated function mapCaseStats(entity:ProjectCaseStatsResponse response,
+        entity:ProjectChangeRequestStatsResponse? changeReqStats) returns types:ProjectCaseStats {
 
     types:ReferenceItem[] stateCount = from entity:ChoiceListItem item in response.stateCount
         select {id: item.id.toString(), label: item.label, count: item.count};
@@ -391,12 +391,12 @@ public isolated function mapCaseStats(entity:ProjectCaseStatsResponse response, 
     select {id: item.id.toString(), label: item.label, count: item.count};
 
     return {
-        totalInteractions: response.totalCount + (changeReqStats ?: 0),
+        totalInteractions: response.totalCount + (changeReqStats is () ? 0 : changeReqStats.totalCount),
         totalCases: response.totalCount,
         averageResponseTime: response.averageResponseTime,
         resolvedCases: response.resolvedCount,
         changeRate: response.changeRate,
-        activeCount: response.activeCount,
+        activeCount: response.activeCount + (changeReqStats is () ? 0 : changeReqStats.activeCount),
         outstandingCount: response.outstandingCount,
         stateCount,
         severityCount,
