@@ -91,15 +91,25 @@ public isolated function streamChat(string sessionId, string payload, websocket:
     websocket:Client pyClient = check createAiChatAgentWsClient(sessionId);
     log:printInfo(string `WebSocket connection established with AI chat agent for session ID: ${sessionId}`);
     check pyClient->writeTextMessage(payload);
+    boolean upstreamClosed = false;
     while true {
         string|error event = pyClient->readTextMessage();
         if event is error {
-            if !(event is websocket:ConnectionClosureError) {
-                check caller->writeTextMessage(string `{"type":"error","message":"${event.message()}"}`);
+            if event is websocket:ConnectionClosureError {
+                upstreamClosed = true;
+            } else {
+                error? writeErr = caller->writeTextMessage(string `{"type":"error","message":"${event.message()}"}`);
+                if writeErr is error {
+                    log:printError("Failed to send error to caller (client disconnected)", writeErr);
+                }
             }
             break;
         }
-        check caller->writeTextMessage(event);
+        error? writeErr = caller->writeTextMessage(event);
+        if writeErr is error {
+            log:printError("Failed to forward event to caller (client disconnected)", writeErr);
+            break;
+        }
         json|error parsed = event.fromJsonString();
         if parsed is map<json> {
             string evtType = (parsed["type"] ?: "").toString();
@@ -108,5 +118,10 @@ public isolated function streamChat(string sessionId, string payload, websocket:
             }
         }
     }
-    _ = check pyClient->close(1000, "session complete");
+    if !upstreamClosed {
+        error? closeErr = pyClient->close(1000, "session complete");
+        if closeErr is error {
+            log:printError("Failed to close upstream WebSocket connection", closeErr);
+        }
+    }
 }

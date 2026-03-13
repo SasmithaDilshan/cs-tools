@@ -324,7 +324,6 @@ dependencies = [
 
 [[package]]
 org = "ballerina"
-<<<<<<< Updated upstream
 name = "uuid"
 version = "1.10.0"
 dependencies = [
@@ -333,7 +332,9 @@ dependencies = [
 	{org = "ballerina", name = "lang.int"},
 	{org = "ballerina", name = "time"}
 ]
-=======
+
+[[package]]
+org = "ballerina"
 name = "websocket"
 version = "2.14.3"
 dependencies = [
@@ -354,7 +355,6 @@ dependencies = [
 modules = [
 	{org = "ballerina", packageName = "websocket", moduleName = "websocket"}
 ]
->>>>>>> Stashed changes
 
 [[package]]
 org = "ballerinai"
@@ -389,11 +389,7 @@ modules = [
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.ai_chat_agent"},
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.authorization"},
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.entity"},
-<<<<<<< Updated upstream
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.registry"},
-=======
-	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.registry_tokens"},
->>>>>>> Stashed changes
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.scim"},
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.types"},
 	{org = "wso2", packageName = "customer_portal", moduleName = "customer_portal.updates"},

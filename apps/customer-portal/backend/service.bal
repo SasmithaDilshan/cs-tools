@@ -4296,7 +4296,10 @@ isolated service class WsProxyService {
         error? err = ai_chat_agent:streamChat(self.sessionId, data, caller);
         if err is error {
             log:printError("WebSocket proxy stream error", err);
-            check caller->writeTextMessage(string `{"type":"error","message":"${err.message()}"}`);
+            error? writeErr = caller->writeTextMessage(string `{"type":"error","message":"${err.message()}"}`);
+            if writeErr is error {
+                log:printError("Failed to send error to caller (client disconnected)", writeErr);
+            }
         }
     }
 
