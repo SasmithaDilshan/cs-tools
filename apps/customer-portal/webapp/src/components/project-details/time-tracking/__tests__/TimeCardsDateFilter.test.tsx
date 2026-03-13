@@ -15,7 +15,7 @@
 // under the License.
 
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import TimeCardsDateFilter from "@time-tracking/TimeCardsDateFilter";
 
 describe("TimeCardsDateFilter", () => {
@@ -32,5 +32,39 @@ describe("TimeCardsDateFilter", () => {
     expect(screen.getByText("Filter by Date Range:")).toBeInTheDocument();
     expect(screen.getByLabelText("From:")).toBeInTheDocument();
     expect(screen.getByLabelText("To:")).toBeInTheDocument();
+  });
+
+  it("should show Clear button when hasFilters is true", () => {
+    const onClear = vi.fn();
+    render(
+      <TimeCardsDateFilter
+        startDate="2025-01-01"
+        endDate="2025-12-31"
+        onStartDateChange={() => {}}
+        onEndDateChange={() => {}}
+        onClear={onClear}
+        hasFilters
+      />,
+    );
+
+    const clearBtn = screen.getByRole("button", { name: /clear/i });
+    expect(clearBtn).toBeInTheDocument();
+    clearBtn.click();
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("should not show Clear button when hasFilters is false", () => {
+    render(
+      <TimeCardsDateFilter
+        startDate=""
+        endDate=""
+        onStartDateChange={() => {}}
+        onEndDateChange={() => {}}
+        onClear={() => {}}
+        hasFilters={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /clear/i })).not.toBeInTheDocument();
   });
 });

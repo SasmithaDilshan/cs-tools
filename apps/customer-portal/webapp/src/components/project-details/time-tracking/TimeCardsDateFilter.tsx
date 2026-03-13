@@ -20,8 +20,9 @@ import {
   Typography,
   TextField,
   InputAdornment,
+  Button,
 } from "@wso2/oxygen-ui";
-import { Calendar } from "@wso2/oxygen-ui-icons-react";
+import { Calendar, X } from "@wso2/oxygen-ui-icons-react";
 import { type JSX } from "react";
 
 export interface TimeCardsDateFilterProps {
@@ -29,12 +30,14 @@ export interface TimeCardsDateFilterProps {
   endDate: string;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
+  onClear?: () => void;
+  hasFilters?: boolean;
 }
 
 /**
- * TimeCardsDateFilter provides date range and state filters for time cards.
+ * TimeCardsDateFilter provides date range filters for time cards.
  *
- * @param {TimeCardsDateFilterProps} props - Date values (startDate, endDate), change handlers (onStartDateChange, onEndDateChange, onStateChange), current state value, and available timeCardStates.
+ * @param {TimeCardsDateFilterProps} props - Date values, change handlers, and optional clear handler.
  * @returns {JSX.Element} The rendered filter card.
  */
 export default function TimeCardsDateFilter({
@@ -42,6 +45,8 @@ export default function TimeCardsDateFilter({
   endDate,
   onStartDateChange,
   onEndDateChange,
+  onClear,
+  hasFilters,
 }: TimeCardsDateFilterProps): JSX.Element {
   return (
     <Card
@@ -56,31 +61,22 @@ export default function TimeCardsDateFilter({
         sx={{
           display: "flex",
           alignItems: "center",
-          gap: 4,
+          gap: 2,
           flexWrap: "wrap",
         }}
       >
-        {/* Date Range Filter */}
-        <Box
+        <Typography
+          variant="body2"
+          component="label"
           sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 2,
-            flex: 1,
-            minWidth: "300px",
+            fontWeight: 500,
+            color: "text.secondary",
+            whiteSpace: "nowrap",
           }}
         >
-          <Typography
-            variant="body2"
-            component="label"
-            sx={{
-              fontWeight: 500,
-              color: "text.secondary",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Filter by Date Range:
-          </Typography>
+          Filter by Date Range:
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography
               component="label"
@@ -139,6 +135,17 @@ export default function TimeCardsDateFilter({
               }}
             />
           </Box>
+          {hasFilters && onClear && (
+            <Button
+              variant="text"
+              size="small"
+              onClick={onClear}
+              startIcon={<X size={16} />}
+              sx={{ color: "text.secondary" }}
+            >
+              Clear
+            </Button>
+          )}
         </Box>
       </Box>
     </Card>
