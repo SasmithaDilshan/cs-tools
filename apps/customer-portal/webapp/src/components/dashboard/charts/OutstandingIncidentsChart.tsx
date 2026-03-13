@@ -112,7 +112,10 @@ export const OutstandingIncidentsChart = ({
           }}
         >
           <ResponsiveContainer width="100%" height="100%">
-            <PieChart legend={{ show: false }} tooltip={{ show: !isError }}>
+            <PieChart
+              legend={{ show: false }}
+              tooltip={{ show: !isError, wrapperStyle: { zIndex: 1000 } }}
+            >
               <Pie
                 data={chartData}
                 cx="50%"

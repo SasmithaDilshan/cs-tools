@@ -34,10 +34,17 @@ interface ChartLayoutProps {
     changeRequests: number;
     total: number;
   };
+  engagements: {
+    onboarding: number;
+    migration: number;
+    services: number;
+    improvements: number;
+    total: number;
+  };
   isLoading?: boolean;
   isErrorOutstanding?: boolean;
   isErrorActiveCases?: boolean;
-  isErrorTrend?: boolean;
+  isErrorEngagements?: boolean;
   excludeS0?: boolean;
 }
 
@@ -57,8 +64,9 @@ const ChartLayout = ({
   isLoading,
   isErrorOutstanding,
   isErrorActiveCases,
-  isErrorTrend,
+  isErrorEngagements,
   excludeS0 = false,
+  engagements,
 }: ChartLayoutProps): JSX.Element => {
   return (
     <Grid container spacing={3} sx={{ mb: 3 }}>
@@ -84,8 +92,9 @@ const ChartLayout = ({
       {/* Cases Trend */}
       <Grid size={{ xs: 12, md: 4 }}>
         <CasesTrendChart
+          data={engagements}
           isLoading={isLoading}
-          isError={isErrorTrend}
+          isError={isErrorEngagements}
         />
       </Grid>
     </Grid>
