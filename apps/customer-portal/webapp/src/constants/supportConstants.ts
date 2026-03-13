@@ -137,10 +137,11 @@ export const CaseSeverityLevel = {
 export type CaseSeverityLevel =
   (typeof CaseSeverityLevel)[keyof typeof CaseSeverityLevel];
 
-// Case type values for case creation.
+// Case type values for case creation and stats filters.
 export const CaseType = {
   DEFAULT_CASE: "default_case",
   SERVICE_REQUEST: "service_request",
+  ENGAGEMENT: "engagement",
   SECURITY_REPORT_ANALYSIS: "security_report_analysis",
   ANNOUNCEMENT: "announcement",
 } as const;

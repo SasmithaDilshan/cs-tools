@@ -17,9 +17,9 @@
 name: END TO END TESTS
 
 on:
-  push:
-    branches:
-      - customer-portal-milestone-1
+  #push:
+    #branches:
+      #- customer-portal-milestone-1
   workflow_dispatch: 
 
 jobs:

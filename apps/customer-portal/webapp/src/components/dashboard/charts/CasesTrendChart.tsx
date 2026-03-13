@@ -22,13 +22,17 @@ import {
   ResponsiveContainer,
 } from "@wso2/oxygen-ui-charts-react";
 import type { JSX } from "react";
-import ErrorIndicator from "@components/common/error-indicator/ErrorIndicator";
-import {
-  OUTSTANDING_ENGAGEMENTS_CATEGORY_CHART_DATA,
-} from "@constants/dashboardConstants";
+import { OUTSTANDING_ENGAGEMENTS_CATEGORY_CHART_DATA } from "@constants/dashboardConstants";
 import { ChartLegend } from "@components/dashboard/charts/ChartLegend";
 
 interface CasesTrendChartProps {
+  data: {
+    onboarding: number;
+    migration: number;
+    services: number;
+    improvements: number;
+    total: number;
+  };
   isLoading?: boolean;
   isError?: boolean;
 }
@@ -39,31 +43,56 @@ interface CasesTrendChartProps {
  * `@param` props - Component props
  */
 export const CasesTrendChart = ({
+  data,
   isLoading,
   isError,
 }: CasesTrendChartProps): JSX.Element => {
   const chartSource = OUTSTANDING_ENGAGEMENTS_CATEGORY_CHART_DATA;
 
-  // TODO(CasesTrendChart): Replace placeholder mock data with API-driven trend data.
+  const safeData =
+    data ??
+    ({
+      onboarding: 0,
+      migration: 0,
+      services: 0,
+      improvements: 0,
+      total: 0,
+    } as const);
+
   const chartData =
     isLoading || isError
       ? chartSource.map((item) => ({
           name: item.name,
           value: 0,
-          color: isError
-            ? colors.grey?.[300] ?? "#D1D5DB"
-            : item.color,
+          color:
+            isError && !isLoading
+              ? (colors.grey?.[300] ?? "#D1D5DB")
+              : item.color,
         }))
       : [
-          { name: "Onboarding", value: 12, color: chartSource[0].color },
-          { name: "Migration", value: 8, color: chartSource[1].color },
-          { name: "Services", value: 15, color: chartSource[2].color },
-          { name: "Improvements", value: 10, color: chartSource[3].color },
+          {
+            name: "Onboarding",
+            value: safeData.onboarding,
+            color: chartSource[0].color,
+          },
+          {
+            name: "Migration",
+            value: safeData.migration,
+            color: chartSource[1].color,
+          },
+          {
+            name: "Services",
+            value: safeData.services,
+            color: chartSource[2].color,
+          },
+          {
+            name: "Improvements",
+            value: safeData.improvements,
+            color: chartSource[3].color,
+          },
         ];
 
-  const total = !isError && !isLoading
-    ? chartData.reduce((sum, item) => sum + (item.value ?? 0), 0)
-    : 0;
+  const total = !isError && !isLoading ? safeData.total : 0;
 
   return (
     <Card sx={{ p: 2, height: "100%" }}>
@@ -72,103 +101,119 @@ export const CasesTrendChart = ({
         Outstanding Engagements
       </Typography>
       {isLoading ? (
-        <Box
-          sx={{
-            height: 240,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Skeleton variant="circular" width={160} height={160} />
-        </Box>
+        <>
+          <Box
+            sx={{
+              height: 240,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Skeleton variant="circular" width={160} height={160} />
+          </Box>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 2,
+              mt: 2,
+            }}
+          >
+            {chartSource.map((_, index) => (
+              <Skeleton key={index} variant="rounded" width={80} height={20} />
+            ))}
+          </Box>
+        </>
       ) : (
-        <Box
-          sx={{
-            height: 240,
-            position: "relative",
-          }}
-        >
+        <>
           <Box
             sx={{
-              height: "100%",
-              opacity: isError ? 0.3 : 1,
-              filter: isError ? "grayscale(1)" : "none",
-              "& *:focus": { outline: "none" },
+              height: 240,
+              position: "relative",
             }}
           >
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart legend={{ show: false }} tooltip={{ show: !isError }}>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={0}
-                  minAngle={15}
-                  dataKey="value"
-                  nameKey="name"
-                  startAngle={90}
-                  endAngle={-270}
-                  label={false}
-                  labelLine={false}
+            <Box
+              sx={{
+                height: "100%",
+                opacity: isError ? 0.3 : 1,
+                filter: isError ? "grayscale(1)" : "none",
+                "& *:focus": { outline: "none" },
+                position: "relative",
+              }}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart
+                  legend={{ show: false }}
+                  tooltip={{ show: !isError, wrapperStyle: { zIndex: 1000 } }}
                 >
-                  {chartData.map((entry, index) => (
-                    <Cell
-                      // eslint-disable-next-line react/no-array-index-key
-                      key={`cell-${index}`}
-                      fill={entry.color}
-                      stroke={colors.common.white}
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+                  <Pie
+                    data={chartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={0}
+                    minAngle={15}
+                    dataKey="value"
+                    nameKey="name"
+                    startAngle={90}
+                    endAngle={-270}
+                    label={false}
+                    labelLine={false}
+                  >
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.color}
+                        stroke={colors.common.white}
+                      />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </Box>
+            {/* Center content: total value or error indicator */}
+            <Box
+              sx={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                textAlign: "center",
+                pointerEvents: "none",
+              }}
+            >
+              {isError ? (
+                <>
+                  <Typography variant="h4" color="text.disabled">
+                    --
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled">
+                    Total
+                  </Typography>
+                </>
+              ) : (
+                <>
+                  <Typography variant="h4">
+                    {chartData.length > 0 ? total : "N/A"}
+                  </Typography>
+                  <Typography variant="caption">Total</Typography>
+                </>
+              )}
+            </Box>
           </Box>
-          {/* Center content: total value or error indicator */}
-          <Box
-            sx={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              textAlign: "center",
-              pointerEvents: "none",
-            }}
-          >
-            {isError ? (
-              <Box
-                sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                }}
-              >
-                <ErrorIndicator entityName="outstanding engagements" />
-                <Typography variant="caption">Total</Typography>
-              </Box>
-            ) : (
-              <>
-                <Typography variant="h4">
-                  {chartData.length > 0 ? total : "N/A"}
-                </Typography>
-                <Typography variant="caption">Total</Typography>
-              </>
-            )}
-          </Box>
-        </Box>
-      )}
-      {/* Legend */}
-      {!isLoading && (
-        <ChartLegend
-          data={chartData.map((item) => ({
-            name: item.name,
-            value: item.value,
-            color: item.color,
-          }))}
-          isError={isError}
-        />
+          {/* Legend */}
+          <ChartLegend
+            data={chartData.map((item) => ({
+              name: item.name,
+              value: item.value,
+              color: item.color,
+            }))}
+            isError={isError}
+            showValues
+          />
+        </>
       )}
     </Card>
   );

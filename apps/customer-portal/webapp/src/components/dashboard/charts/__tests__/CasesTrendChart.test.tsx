@@ -72,41 +72,51 @@ vi.mock("../ChartLegend", () => ({
   ChartLegend: ({ data }: any) => (
     <div data-testid="chart-legend">
       {data.map((item: any) => (
-        <span key={item.name}>{item.name}</span>
+        <span key={item.name}>{`${item.name}:${item.value}`}</span>
       ))}
     </div>
   ),
 }));
 
-vi.mock("@components/common/error-indicator/ErrorIndicator", () => ({
-  __esModule: true,
-  default: ({ entityName }: { entityName: string }) => (
-    <div data-testid="error-indicator">Error: {entityName}</div>
-  ),
-}));
-
 describe("CasesTrendChart", () => {
+  const baseData = {
+    onboarding: 12,
+    migration: 8,
+    services: 15,
+    improvements: 10,
+    total: 45,
+  };
+
   it("should render title correctly", () => {
-    render(<CasesTrendChart isLoading={false} />);
+    render(<CasesTrendChart data={baseData} isLoading={false} />);
     expect(screen.getByText(/Outstanding Engagements/i)).toBeInTheDocument();
   });
 
   it("should render skeleton when loading", () => {
-    render(<CasesTrendChart isLoading={true} />);
+    render(<CasesTrendChart data={baseData} isLoading={true} />);
     const skeletons = screen.getAllByTestId("skeleton");
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
   it("should render pie chart and legend when data is loaded", () => {
-    render(<CasesTrendChart isLoading={false} />);
+    render(<CasesTrendChart data={baseData} isLoading={false} />);
     expect(screen.getByTestId("pie-chart")).toBeInTheDocument();
     expect(screen.getByTestId("chart-legend")).toBeInTheDocument();
   });
 
   it("should render error state correctly", () => {
-    render(<CasesTrendChart isLoading={false} isError={true} />);
+    render(
+      <CasesTrendChart data={baseData} isLoading={false} isError={true} />,
+    );
 
     expect(screen.getByTestId("pie-chart")).toBeInTheDocument();
-    expect(screen.getByTestId("error-indicator")).toBeInTheDocument();
+    const totalTypography = screen.getByTestId("typography-h4");
+    expect(totalTypography).toHaveTextContent("--");
+  });
+
+  it("should display correct total in center from data.total", () => {
+    render(<CasesTrendChart data={baseData} isLoading={false} />);
+    const totalTypography = screen.getByTestId("typography-h4");
+    expect(totalTypography).toHaveTextContent("45");
   });
 });

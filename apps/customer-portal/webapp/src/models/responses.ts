@@ -177,6 +177,12 @@ export interface CaseType {
   count: number;
 }
 
+export interface EngagementTypeCount {
+  id: string;
+  label: string;
+  count: number;
+}
+
 export interface CasesTrendPeriod {
   period: string;
   severities: CaseSeverity[];
@@ -184,6 +190,9 @@ export interface CasesTrendPeriod {
 
 export interface ProjectCasesStats {
   totalCases: number;
+  totalCount?: number;
+  activeCount?: number;
+  outstandingCount?: number;
   averageResponseTime: number;
   resolvedCases: {
     total: number;
@@ -200,6 +209,8 @@ export interface ProjectCasesStats {
   outstandingSeverityCount: CaseSeverity[];
   caseTypeCount: CaseType[];
   casesTrend: CasesTrendPeriod[];
+  engagementTypeCount?: EngagementTypeCount[];
+  outstandingEngagementTypeCount?: EngagementTypeCount[];
 }
 
 // Project time tracking statistics.
@@ -389,6 +400,8 @@ export interface PatchChangeRequestResponse {
 // Change Request Stats API Response
 export interface ChangeRequestStatsResponse {
   totalCount: number;
+  activeCount?: number;
+  outstandingCount?: number;
   stateCount: Array<{
     id: string;
     label: string;

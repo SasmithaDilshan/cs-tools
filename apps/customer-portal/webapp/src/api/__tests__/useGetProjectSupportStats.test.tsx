@@ -31,9 +31,9 @@ vi.mock("@/hooks/useLogger", () => ({
 
 const mockSupportStatsResponse = {
   ongoingCases: 47,
-  activeChats: 3,
-  sessionChats: 10,
+  resolvedRecently: 10,
   resolvedChats: 34,
+  activeChats: 3,
 };
 
 vi.mock("@asgardeo/react", () => ({

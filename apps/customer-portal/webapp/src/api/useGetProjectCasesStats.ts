@@ -20,13 +20,14 @@ import { useAuthApiClient } from "@api/useAuthApiClient";
 import { useLogger } from "@hooks/useLogger";
 import { ApiQueryKeys } from "@constants/apiConstants";
 import type { ProjectCasesStats } from "@models/responses";
+import { CaseType } from "@constants/supportConstants";
 
 export { DASHBOARD_CASE_TYPE_LABELS } from "@constants/dashboardConstants";
 
 export interface UseGetProjectCasesStatsOptions {
   incidentId?: string;
   queryId?: string;
-  /** When false, the query will not run. Use to wait for filters before fetching. */
+  caseTypes?: Array<`${(typeof CaseType)[keyof typeof CaseType]}` | string>;
   enabled?: boolean;
 }
 
@@ -45,10 +46,10 @@ export function useGetProjectCasesStats(
   const logger = useLogger();
   const { isSignedIn, isLoading: isAuthLoading } = useAsgardeo();
   const authFetch = useAuthApiClient();
-  const { incidentId, queryId, enabled = true } = options ?? {};
+  const { incidentId, queryId, caseTypes, enabled = true } = options ?? {};
 
   return useQuery<ProjectCasesStats, Error>({
-    queryKey: [ApiQueryKeys.CASES_STATS, id, incidentId, queryId],
+    queryKey: [ApiQueryKeys.CASES_STATS, id, incidentId, queryId, caseTypes],
     queryFn: async (): Promise<ProjectCasesStats> => {
       logger.debug(`Fetching case stats for project ID: ${id}`);
 
@@ -60,11 +61,23 @@ export function useGetProjectCasesStats(
         }
 
         let requestUrl = `${baseUrl}/projects/${id}/stats/cases`;
-        if (incidentId && queryId) {
-          const params = new URLSearchParams();
+
+        const params = new URLSearchParams();
+
+        if (Array.isArray(caseTypes) && caseTypes.length > 0) {
+          caseTypes.forEach((type) => {
+            if (type) {
+              params.append("caseTypes", type);
+            }
+          });
+        } else if (incidentId && queryId) {
           params.append("caseTypes", queryId);
           params.append("caseTypes", incidentId);
-          requestUrl += `?${params.toString()}`;
+        }
+
+        const queryString = params.toString();
+        if (queryString) {
+          requestUrl += `?${queryString}`;
         }
 
         const response = await authFetch(requestUrl, {
@@ -79,7 +92,30 @@ export function useGetProjectCasesStats(
           throw new Error(`Error fetching case stats: ${response.statusText}`);
         }
 
-        const data: ProjectCasesStats = await response.json();
+        const raw = (await response.json()) as any;
+
+        const data: ProjectCasesStats = {
+          totalCases: raw?.totalCases ?? raw?.totalCount ?? 0,
+          totalCount: raw?.totalCount,
+          activeCount: raw?.activeCount,
+          outstandingCount: raw?.outstandingCount,
+          averageResponseTime: raw?.averageResponseTime ?? 0,
+          resolvedCases: {
+            total: raw?.resolvedCases?.total ?? 0,
+            currentMonth: raw?.resolvedCases?.currentMonth ?? 0,
+            pastThirtyDays: raw?.resolvedCases?.pastThirtyDays,
+          },
+          changeRate: raw?.changeRate,
+          stateCount: raw?.stateCount ?? [],
+          severityCount: raw?.severityCount ?? [],
+          outstandingSeverityCount: raw?.outstandingSeverityCount ?? [],
+          caseTypeCount: raw?.caseTypeCount ?? [],
+          casesTrend: raw?.casesTrend ?? [],
+          engagementTypeCount: raw?.engagementTypeCount ?? [],
+          outstandingEngagementTypeCount:
+            raw?.outstandingEngagementTypeCount ?? [],
+        };
+
         logger.debug("[useGetProjectCasesStats] Data received:", data);
         return data;
       } catch (error) {

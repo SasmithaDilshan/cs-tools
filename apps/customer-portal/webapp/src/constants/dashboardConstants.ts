@@ -72,14 +72,14 @@ export const DASHBOARD_STATS: StatConfigItem[] = [
   },
   {
     id: "resolvedCases",
-    label: "Resolved support cases",
+    label: "Support Cases (Last 30d)",
     icon: CheckCircle,
     iconColor: "success",
     tooltipText: "Successfully closed and resolved cases",
   },
   {
     id: "avgResponseTime",
-    label: "Avg. Response Time",
+    label: "Avg. Response Time (Last 30d)",
     icon: Activity,
     iconColor: "info",
     tooltipText: "Average time taken to first respond to a case",

@@ -96,65 +96,68 @@ export const ActiveCasesChart = ({
             "& *:focus": { outline: "none" },
           }}
         >
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart legend={{ show: false }} tooltip={{ show: !isError }}>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={80}
-                paddingAngle={0}
-                minAngle={15}
-                dataKey="value"
-                nameKey="name"
-                startAngle={90}
-                endAngle={-270}
-                label={false}
-                labelLine={false}
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart
+                legend={{ show: false }}
+                tooltip={{ show: !isError, wrapperStyle: { zIndex: 1000 } }}
               >
-                {chartData.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={entry.color}
-                    stroke={colors.common.white}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-          {/* Center content (Total count or Error indicator) */}
-          <Box
-            sx={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              textAlign: "center",
-              pointerEvents: "none",
-            }}
-          >
-            {isError ? (
-              <Box
-                sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                }}
-              >
-                <ErrorIndicator entityName="active cases" />
-                <Typography variant="caption">Total</Typography>
-              </Box>
-            ) : (
-              <>
-                <Typography variant="h4">
-                  {data ? safeData.total : "N/A"}
-                </Typography>
-                <Typography variant="caption">Total</Typography>
-              </>
-            )}
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  paddingAngle={0}
+                  minAngle={15}
+                  dataKey="value"
+                  nameKey="name"
+                  startAngle={90}
+                  endAngle={-270}
+                  label={false}
+                  labelLine={false}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={entry.color}
+                      stroke={colors.common.white}
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            {/* Center content (Total count or Error indicator) */}
+            <Box
+              sx={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                textAlign: "center",
+                pointerEvents: "none",
+              }}
+            >
+              {isError ? (
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                  }}
+                >
+                  <ErrorIndicator entityName="active cases" />
+                  <Typography variant="caption">Total</Typography>
+                </Box>
+              ) : (
+                <>
+                  <Typography variant="h4">
+                    {data ? safeData.total : "N/A"}
+                  </Typography>
+                  <Typography variant="caption">Total</Typography>
+                </>
+              )}
+            </Box>
           </Box>
-        </Box>
       )}
       {/* Loading state */}
       {isLoading ? (
