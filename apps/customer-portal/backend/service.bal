@@ -22,6 +22,7 @@ import customer_portal.scim;
 import customer_portal.types;
 import customer_portal.updates;
 import customer_portal.user_management;
+import customer_portal.product_consumption_subscription;
 
 import ballerina/cache;
 import ballerina/http;
@@ -34,28 +35,28 @@ final cache:Cache userCache = new ({
     cleanupInterval: 1800
 });
 
-service class ErrorInterceptor {
-    *http:ResponseErrorInterceptor;
+// service class ErrorInterceptor {
+//     *http:ResponseErrorInterceptor;
 
-    # Intercepts the response error.
-    #
-    # + err - The error occurred during request processing
-    # + return - Bad request response or error
-    remote function interceptResponseError(error err) returns http:BadRequest|error {
+//     # Intercepts the response error.
+//     #
+//     # + err - The error occurred during request processing
+//     # + return - Bad request response or error
+//     remote function interceptResponseError(error err) returns http:BadRequest|error {
 
-        // Handle data-binding errors.
-        if err is http:PayloadBindingError {
-            string customError = "Payload binding failed!";
-            log:printError(customError, err);
-            return {
-                body: {
-                    message: customError
-                }
-            };
-        }
-        return err;
-    }
-}
+//         // Handle data-binding errors.
+//         if err is http:PayloadBindingError {
+//             string customError = "Payload binding failed!";
+//             log:printError(customError, err);
+//             return {
+//                 body: {
+//                     message: customError
+//                 }
+//             };
+//         }
+//         return err;
+//     }
+// }
 
 // TODO: Remove after the ballerina header configs setting through choreo issue is fixed
 http:ListenerConfiguration listenerConf = {
@@ -68,9 +69,9 @@ http:ListenerConfiguration listenerConf = {
     label: "Customer Portal",
     id: "cs/customer-portal"
 }
-service http:InterceptableService / on new http:Listener(9090, listenerConf) {
-    public function createInterceptors() returns http:Interceptor[] =>
-        [new authorization:JwtInterceptor(), new ErrorInterceptor()];
+service / on new http:Listener(9090, listenerConf) {
+    // public function createInterceptors() returns http:Interceptor[] =>
+    //     [new authorization:JwtInterceptor(), new ErrorInterceptor()];
 
     # Service init function.
     #
@@ -4244,4 +4245,20 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
         }
         return response;
     }
+
+    # Fetch change request details by change request ID.
+    #
+    # + return - Change request details object or Error
+    resource function post test(product_consumption_subscription:ProjectStatusRequest payload)
+        returns json|error {
+
+        json|error retval = product_consumption_subscription:process(payload);
+        if retval is error {
+            log:printError("Error while fetching change request details", retval);
+
+        }
+        return retval;
+    }
+
+
 }
