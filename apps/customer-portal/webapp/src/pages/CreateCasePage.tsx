@@ -38,6 +38,7 @@ import { useSuccessBanner } from "@context/success-banner/SuccessBannerContext";
 import { useLogger } from "@hooks/useLogger";
 import type { CreateCaseRequest } from "@models/requests";
 import type { DeploymentProductItem } from "@models/responses";
+import { isDeployedProductsResponse } from "@models/responses";
 import { BasicInformationSection } from "@components/support/case-creation-layout/form-sections/basic-information-section/BasicInformationSection";
 import { CaseCreationHeader } from "@components/support/case-creation-layout/header/CaseCreationHeader";
 import { CaseDetailsSection } from "@components/support/case-creation-layout/form-sections/case-details-section/CaseDetailsSection";
@@ -163,13 +164,15 @@ export default function CreateCasePage(): JSX.Element {
     isError: deploymentProductsError,
   } = useGetDeploymentsProducts(selectedDeploymentId);
   const allDeploymentProducts = useMemo(() => {
-    const deploymentProductsArray = Array.isArray(deploymentProductsData)
-      ? deploymentProductsData
-      : ((deploymentProductsData as any)?.deployedProducts ?? []) as DeploymentProductItem[];
+    if (!deploymentProductsData) return [];
 
-    return deploymentProductsArray.filter((item: DeploymentProductItem) =>
-      item.product?.label?.trim(),
-    );
+    const products: DeploymentProductItem[] = Array.isArray(deploymentProductsData)
+      ? deploymentProductsData
+      : isDeployedProductsResponse(deploymentProductsData)
+      ? deploymentProductsData.deployedProducts
+      : [];
+
+    return products.filter((item) => item.product?.label?.trim());
   }, [deploymentProductsData]);
   const baseProductOptions = getBaseProductOptions(allDeploymentProducts);
 

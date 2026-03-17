@@ -139,8 +139,11 @@ export default function EngagementsPage(): JSX.Element {
 
   const currentPageCases = useMemo(() => {
     if (!data || data.pages.length === 0) return [];
-    const pageIndex = Math.max(0, Math.min(page - 1, data.pages.length - 1));
-    return data.pages[pageIndex]?.cases ?? [];
+    const requestedPageIndex = page - 1;
+    if (requestedPageIndex < 0 || requestedPageIndex >= data.pages.length) {
+      return [];
+    }
+    return data.pages[requestedPageIndex]?.cases ?? [];
   }, [data, page]);
 
   const apiTotalRecords = data?.pages?.[0]?.totalRecords ?? 0;

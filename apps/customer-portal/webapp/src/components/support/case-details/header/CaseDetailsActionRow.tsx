@@ -131,6 +131,25 @@ export default function CaseDetailsActionRow({
   const { data: filterMetadata } = useGetProjectFilters(projectId);
   const caseStates = filterMetadata?.caseStates;
 
+  if (showOnlyEngineer && !hasEngineer) {
+    return (
+      <Paper
+        variant="outlined"
+        sx={{
+          mt: 2,
+          mb: 1,
+          py: 0.5,
+          px: 2,
+          bgcolor: "background.default",
+        }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          No engineer assigned
+        </Typography>
+      </Paper>
+    );
+  }
+
   const { showSuccess } = useSuccessBanner();
   const { showError } = useErrorBanner();
 

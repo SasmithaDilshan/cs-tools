@@ -130,7 +130,9 @@ export default function AllCasesPage(): JSX.Element {
   const isStatsLoading =
     isStatsQueryLoading || (!!projectId && !hasStatsResponse);
   const isCasesAreaLoading =
-    isCasesQueryLoading || (!!projectId && !hasCasesResponse);
+    isCasesQueryLoading ||
+    (!!projectId && !hasCasesResponse) ||
+    isFetchingNextPage;
 
   const isInitialPageLoading = isStatsLoading || isCasesAreaLoading;
 
@@ -152,9 +154,12 @@ export default function AllCasesPage(): JSX.Element {
 
   const currentPageCases = useMemo(() => {
     if (!data || data.pages.length === 0) return [];
-    const pageIndex = Math.max(0, Math.min(page - 1, data.pages.length - 1));
-    return data.pages[pageIndex]?.cases ?? [];
-  }, [data, page]);
+    const requestedPageIndex = page - 1;
+    if (requestedPageIndex < 0 || requestedPageIndex >= data.pages.length) {
+      return [];
+    }
+    return data.pages[requestedPageIndex]?.cases ?? [];
+  }, [data, page, isFetchingNextPage]);
 
   const apiTotalRecords = data?.pages?.[0]?.totalRecords ?? 0;
 
