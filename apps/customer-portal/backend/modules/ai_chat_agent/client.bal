@@ -40,7 +40,6 @@ final http:Client aiChatAgentClient = check new (aiChatAgentBaseUrl, {
 });
 
 isolated function createAiChatAgentWsClient(string sessionId) returns websocket:Client|error {
-    // string encodedSessionId = check url:encode(sessionId, "UTF-8");
     return new (string `${aiChatAgentWsBaseUrl}/ws?sessionId=${sessionId}`, {
         auth: {
             ...clientCredentialsOauth2ConfigWs
