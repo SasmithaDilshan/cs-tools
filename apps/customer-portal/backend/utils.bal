@@ -853,7 +853,11 @@ public isolated function mapProjectsResponse(entity:ProjectsResponse response) r
             name: project.name,
             description: project.description,
             createdOn: project.createdOn,
-            'type: {id: project.'type.id, label: project.'type.name}
+            'type: {id: project.'type.id, label: project.'type.name},
+            hasAgent: project.hasAgent,
+            activeCasesCount: project.activeCasesCount,
+            activeChatsCount: project.activeChatsCount,
+            slaStatus: project.slaStatus
         };
 
     return {projects, totalRecords: response.totalRecords, 'limit: response.'limit, offset: response.offset};

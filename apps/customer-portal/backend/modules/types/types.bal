@@ -272,12 +272,30 @@ public type Project record {|
     string? description;
     # Project type
     ReferenceItem 'type;
-    json...;
+    # Novera agent enabled status for the project
+    boolean hasAgent;
+    # Active cases count
+    int activeCasesCount;
+    # Active chats/conversations count
+    int activeChatsCount;
+    # SLA status (e.g., "Needs Attention")
+    string slaStatus;
 |};
 
 # Project information.
 public type ProjectResponse record {|
-    *Project;
+    # ID of the project
+    entity:IdString id;
+    # Name of the project
+    string name;
+    # Project key
+    string key;
+    # Created date and time
+    string createdOn;
+    # Description of the project
+    string? description;
+    # Project type
+    ReferenceItem 'type;
     # Salesforce ID
     string sfId;
     # Indicates if the project has service requests

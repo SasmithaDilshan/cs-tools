@@ -105,6 +105,14 @@ public type Project record {|
     string? description;
     # Project type
     ReferenceTableItem 'type;
+    # Agent enabled status for the project
+    boolean hasAgent;
+    # Active cases count
+    int activeCasesCount;
+    # Active chats/conversations count
+    int activeChatsCount;
+    # SLA status (e.g., "Needs Attention")
+    string slaStatus;
     json...;
 |};
 
@@ -131,7 +139,18 @@ public type ProjectsResponse record {|
 
 # Project information.
 public type ProjectResponse record {|
-    *Project;
+    # ID
+    IdString id;
+    # Name
+    string name;
+    # Project key
+    string key;
+    # Created date and time
+    string createdOn;
+    # Description
+    string? description;
+    # Project type
+    ReferenceTableItem 'type;
     # Salesforce ID
     string sfId;
     # Indicates if the project has service requests
@@ -635,6 +654,10 @@ public type ProjectCaseStatsResponse record {|
 
 # Project conversation statistics response.
 public type ProjectConversationStatsResponse record {|
+    # Total conversation count
+    int totalCount;
+    # Active conversation count
+    int activeCount;
     # Count of conversations by state
     ChoiceListItem[] stateCount;
     json...;
