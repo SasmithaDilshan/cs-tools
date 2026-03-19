@@ -22,4 +22,5 @@ const ORGANIZATION_EXTERNAL = "external";
 const DOMAIN_DEFAULT = "DEFAULT";
 const ATTRIBUTE_PHONE_NUMBERS = "phoneNumbers";
 const ATTRIBUTE_USERNAME = "userName";
+const ATTRIBUTE_SCHEMA = "urn:scim:wso2:schema";
 public const MOBILE_PHONE_NUMBER_TYPE = "mobile";

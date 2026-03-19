@@ -202,6 +202,8 @@ public type User record {|
     *entity:UserResponse;
     # Phone number of the user
     string phoneNumber?;
+    # Last password update time
+    string? lastPasswordUpdateTime?;
 |};
 
 # Payload for updating user information.

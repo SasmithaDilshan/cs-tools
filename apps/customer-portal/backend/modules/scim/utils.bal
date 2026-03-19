@@ -38,3 +38,12 @@ public isolated function processPhoneNumber(User user) returns string? {
     }
     return mobilePhoneNumber;
 }
+
+# Process SCIM user to extract the last password update time.
+#
+# + user - SCIM user object
+# + return - Last password update time if found, else nil
+public isolated function processLastPasswordUpdateTime(User user) returns string? {
+    SchemaScope? schemaScope = user.urn\:scim\:wso2\:schema;
+    return schemaScope != () ? schemaScope?.lastPasswordUpdateTime : ();
+}

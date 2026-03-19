@@ -45,6 +45,15 @@ public type User record {|
     string id;
     # Phone numbers
     PhoneNumber[]? phoneNumbers;
+    # Schema scope
+    SchemaScope? urn\:scim\:wso2\:schema;
+    json...;
+|};
+
+# Schema scope.
+public type SchemaScope record {|
+    # Last password update time
+    string? lastPasswordUpdateTime?;
     json...;
 |};
 
