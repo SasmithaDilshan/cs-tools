@@ -36,6 +36,11 @@ export default function AppWithConfig(): JSX.Element {
       afterSignInUrl={authConfig.signInRedirectURL}
       afterSignOutUrl={authConfig.signOutRedirectURL}
       scopes={["openid", "email", "groups"]}
+      preferences={{
+        theme: {
+          inheritFromBranding: false
+        }
+      }}
     >
       <BrowserRouter>
         <LoggerProvider config={loggerConfig}>
