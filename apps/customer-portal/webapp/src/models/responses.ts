@@ -163,8 +163,8 @@ export interface CaseCreationMetadata {
   }[];
   conversationSummary: {
     messagesExchanged: number;
-    troubleshootingAttempts: string;
-    kbArticlesReviewed: string;
+    troubleshootingAttempts: number;
+    kbArticlesReviewed: number;
   };
 }
 
