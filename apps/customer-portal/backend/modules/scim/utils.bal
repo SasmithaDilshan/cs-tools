@@ -39,7 +39,7 @@ public isolated function processPhoneNumber(User user) returns string? {
     return mobilePhoneNumber;
 }
 
-# Process SCIM user to extract the lst password update time.
+# Process SCIM user to extract the last password update time.
 #
 # + user - SCIM user object
 # + return - Last password update time if found, else nil
