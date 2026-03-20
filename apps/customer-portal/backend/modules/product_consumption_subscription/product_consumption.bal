@@ -48,7 +48,7 @@ public isolated function processLicenseDownload(LicenseDownloadPayload payload) 
     if applicationId is () {
         return error("Application ID is required.");
     }
-    // SUBSCRIBE APPLICATION 
+    // Subscribe Application 
     if status == STATUS_CREATED {
         ApplicationSubscriptionResponse _ = check productConsumptionClient->/applications/[applicationId]/subscribe
             .post(applicationId);
@@ -58,7 +58,7 @@ public isolated function processLicenseDownload(LicenseDownloadPayload payload) 
         status = STATUS_SUBSCRIBED;
     }
 
-    // GENERATE CREDENTIALS
+    // Generate Credentials
     if status == STATUS_SUBSCRIBED {
         ApplicationKeyGenerationResponse creds =
             check productConsumptionClient->/applications/[applicationId]/generate\-credentials.post({});
@@ -72,7 +72,7 @@ public isolated function processLicenseDownload(LicenseDownloadPayload payload) 
         status = STATUS_GENERATED_CREDENTIALS;
     }
 
-    // GENERATE SECRET KEYS
+    // Generate Secret Keys
     if status == STATUS_GENERATED_CREDENTIALS {
         SecretKeysResponse keys = check productConsumptionClient->/generate\-secret\-keys.post({});
 
@@ -85,7 +85,7 @@ public isolated function processLicenseDownload(LicenseDownloadPayload payload) 
         status = STATUS_GENERATED_SECRET_KEYS;
     }
 
-    // DOWNLOAD LICENSE
+    // Download License
     if status == STATUS_GENERATED_SECRET_KEYS {
         LicenseResponse license =
         check productConsumptionClient->/projects/[payload.projectId]/deployments/[payload.deploymentId]/license.post(

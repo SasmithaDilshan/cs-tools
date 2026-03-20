@@ -67,22 +67,22 @@ public type ApplicationCreateResponse record {|
 |};
 
 # Choreo credentials generation response structure.
-public type CredentialsResponse record {
+public type CredentialsResponse record {|
     # OAuth2 consumer key
     string consumerKey;
     # OAuth2 consumer secret
     string consumerSecret;
     json...;
-};
+|};
 
 # Choreo secret keys generation response structure.
-public type SecretKeysResponse record {
+public type SecretKeysResponse record {|
     # Primary subscription secret key
     string primarySecretKey;
     # Secondary subscription secret key
     string secondarySecretKey;
     json...;
-};
+|};
 
 # Subscription data within the license response.
 public type SubscriptionData record {|
