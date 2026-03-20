@@ -26,7 +26,39 @@ import { loggerConfig } from "@config/loggerConfig";
 import LoggerProvider from "@context/logger/LoggerProvider";
 import { authConfig } from "@config/authConfig";
 
-const queryClient: QueryClient = new QueryClient();
+/**
+ * Custom retry function for React Query.
+ * Only retries on 502 (Bad Gateway) and 503 (Service Unavailable) errors.
+ *
+ * @param {number} failureCount - The number of times the request has failed.
+ * @param {Error} error - The error that occurred.
+ * @returns {boolean} True if the request should be retried, false otherwise.
+ */
+function shouldRetry(failureCount: number, error: Error): boolean {
+  // Max 3 retries
+  if (failureCount >= 3) {
+    return false;
+  }
+
+  // Check if error has a status code property
+  const statusCode = (error as any)?.response?.status || (error as any)?.status;
+
+  // Only retry on 502 (Bad Gateway) and 503 (Service Unavailable)
+  return statusCode === 502 || statusCode === 503;
+}
+
+const queryClient: QueryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: shouldRetry,
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+    },
+    mutations: {
+      retry: shouldRetry,
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+    },
+  },
+});
 
 export default function AppWithConfig(): JSX.Element {
   return (
