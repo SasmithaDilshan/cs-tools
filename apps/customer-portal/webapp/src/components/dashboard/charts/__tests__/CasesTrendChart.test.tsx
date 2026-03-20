@@ -80,10 +80,12 @@ vi.mock("../ChartLegend", () => ({
 
 describe("CasesTrendChart", () => {
   const baseData = {
-    onboarding: 12,
-    migration: 8,
-    services: 15,
-    improvements: 10,
+    categories: [
+      { name: "Onboarding", value: 12 },
+      { name: "Migration", value: 8 },
+      { name: "Services", value: 15 },
+      { name: "Improvements", value: 10 },
+    ],
     total: 45,
   };
 

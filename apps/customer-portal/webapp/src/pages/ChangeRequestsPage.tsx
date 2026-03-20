@@ -80,7 +80,6 @@ export default function ChangeRequestsPage(): JSX.Element {
     data: stats,
     isLoading: isStatsLoading,
     isError: isStatsError,
-    isFetching: isStatsFetching,
   } = useGetProjectChangeRequestStats(projectId || "", { enabled: !!projectId });
 
   // Build API request (following cases listing pattern)

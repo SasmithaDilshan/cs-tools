@@ -31,7 +31,6 @@ import {
 import {
   ArrowLeft,
   TriangleAlert,
-  ChevronRight,
   CircleCheckBig,
   Circle,
   Server,

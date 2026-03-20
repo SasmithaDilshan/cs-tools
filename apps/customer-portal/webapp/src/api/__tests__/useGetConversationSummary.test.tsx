@@ -15,15 +15,31 @@
 // under the License.
 
 import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 import useGetConversationSummary from "@api/useGetConversationSummary";
-import * as apiRequest from "../apiRequest";
+import { useAuthApiClient } from "@api/useAuthApiClient";
 
-vi.mock("@api/apiRequest", () => ({
-  apiRequest: vi.fn(),
+vi.mock("@asgardeo/react", () => ({
+  useAsgardeo: vi.fn(() => ({
+    isSignedIn: true,
+    isLoading: false,
+  })),
 }));
+
+vi.mock("@api/useAuthApiClient", () => ({
+  useAuthApiClient: vi.fn(),
+}));
+
+vi.mock("@hooks/useLogger", () => ({
+  useLogger: vi.fn(() => ({
+    debug: vi.fn(),
+    error: vi.fn(),
+  })),
+}));
+
+const mockAuthFetch = vi.fn();
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -42,8 +58,7 @@ const createWrapper = () => {
 describe("useGetConversationSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    const { useAuthApiClient } = require("@api/useAuthApiClient");
-    useAuthApiClient.mockReturnValue(mockAuthFetch);
+    vi.mocked(useAuthApiClient).mockReturnValue(mockAuthFetch);
     (window as any).config = {
       CUSTOMER_PORTAL_BACKEND_BASE_URL: "http://localhost:9090",
     };

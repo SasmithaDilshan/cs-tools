@@ -76,10 +76,12 @@ describe("ChartLayout", () => {
       total: 20,
     },
     engagements: {
-      onboarding: 1,
-      migration: 2,
-      services: 3,
-      improvements: 4,
+      categories: [
+        { name: "Onboarding", value: 1 },
+        { name: "Migration", value: 2 },
+        { name: "Services", value: 3 },
+        { name: "Improvements", value: 4 },
+      ],
       total: 10,
     },
     isLoading: false,

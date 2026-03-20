@@ -14,10 +14,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { Grid, type JSX } from "@wso2/oxygen-ui";
+import { Grid } from "@wso2/oxygen-ui";
 import { CircleAlert, Shield, FileCheck } from "@wso2/oxygen-ui-icons-react";
 import { useParams } from "react-router";
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 import { StatCard } from "@components/dashboard/stats/StatCard";
 import { usePostProductVulnerabilitiesSearch } from "@api/usePostProductVulnerabilitiesSearch";
 import { useGetProjectCasesStats } from "@api/useGetProjectCasesStats";

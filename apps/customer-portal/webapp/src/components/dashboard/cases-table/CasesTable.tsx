@@ -33,6 +33,9 @@ import type { CaseListItem, CaseSearchResponse } from "@models/responses";
 
 const OUTSTANDING_STATUS_IDS = [1, 10, 18, 1003, 1006] as const;
 
+const isClosedStatus = (label?: string): boolean =>
+  label?.trim().toLowerCase() === "closed";
+
 interface CasesTableProps {
   projectId: string;
   excludeS0?: boolean;
@@ -80,9 +83,7 @@ const CasesTable = ({
                       !isS0SeverityLabel(item.label),
                   )
                 : def.metadataKey === "caseStates"
-                ? (metadataOptions as any[]).filter(
-                    (s) => s.label?.toLowerCase()?.trim() !== "closed"
-                  )
+                ? (metadataOptions as any[]).filter((s) => !isClosedStatus(s.label))
                 : metadataOptions;
             return filtered.map((item: { label: string; id: string }) => ({
               label:
@@ -106,7 +107,7 @@ const CasesTable = ({
     () => {
       // If no status filter is applied, use all statuses except Closed (id: 3)
       const defaultStatusIds = filtersMetadata?.caseStates
-        ?.filter((status) => status.label?.toLowerCase() !== "closed")
+        ?.filter((status) => !isClosedStatus(status.label))
         .map((status) => Number(status.id)) || [];
       
       return {
