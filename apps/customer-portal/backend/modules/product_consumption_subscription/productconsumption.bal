@@ -45,11 +45,7 @@ public isolated function downloadLicense(LicenseDownloadPayload payload) returns
 
         applicationId = app.applicationId;
 
-        Result _ = check productConsumptionClient->/projects/[payload.projectId]
-            .patch({
-                status: 2,
-                applicationId: applicationId
-            });
+        Result _ = check productConsumptionClient->/projects/[payload.projectId].patch({status: 2, applicationId});
 
         status = 2;
     }
