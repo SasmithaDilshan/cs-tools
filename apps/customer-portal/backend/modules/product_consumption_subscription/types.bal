@@ -28,8 +28,6 @@ public type ClientAuthConfig record {|
 public type Result record {|
     # Response message
     string message?;
-    # ServiceNow system identifier
-    string sys_id?;
     # Choreo application ID
     string applicationId?;
     # Status data
@@ -104,6 +102,7 @@ public type SubscriptionData record {|
     string clientSecret;
     # Subscription secrets
     string secrets;
+    json...;
 |};
 
 # License details within the license response.

@@ -57,7 +57,7 @@ public isolated function downloadLicense(LicenseDownloadPayload payload) returns
     }
 
     // GENERATE CREDENTIALS
-    if (status == STATUS_SUBSCRIBED) {
+    if status == STATUS_SUBSCRIBED {
         ApplicationKeyGenerationResponse creds =
             check productConsumptionClient->/applications/[applicationId]/generate\-credentials.post({});
 
