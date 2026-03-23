@@ -730,6 +730,23 @@ export default function CreateCasePage(): JSX.Element {
 
         showSuccess("Case created successfully");
 
+        await Promise.all([
+          queryClient.refetchQueries({
+            queryKey: [ApiQueryKeys.CASES_STATS, projectId],
+            type: "active",
+          }),
+          queryClient.refetchQueries({
+            queryKey: [ApiQueryKeys.PROJECT_CASES],
+            type: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: [ApiQueryKeys.CASES_STATS, projectId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: [ApiQueryKeys.PROJECT_CASES],
+          }),
+        ]);
+
         // Clean up sessionStorage safely
         try {
           sessionStorage.removeItem(STORAGE_KEY);
@@ -743,9 +760,6 @@ export default function CreateCasePage(): JSX.Element {
 
         // Refetch security vulnerabilities if this was a security report
         if (isCreatedSecurityReport) {
-          await queryClient.invalidateQueries({
-            queryKey: [ApiQueryKeys.PROJECT_CASES, projectId],
-          });
           navigate(
             `/projects/${projectId}/security-center/security-report-analysis/${caseId}?tab=${SecurityTab.VULNERABILITIES}`,
           );
