@@ -2310,10 +2310,12 @@ components:
           type: string
           description: Allowed domain list of the account
           nullable: true
+          default: ""
         classification:
           type: string
           description: Account classification
           nullable: true
+          default: ""
         isPartner:
           type: boolean
           description: Whether the account is a partner or not
@@ -4807,6 +4809,10 @@ components:
           type: string
           description: Number
           nullable: true
+        abbreviation:
+          type: string
+          description: Abbreviation
+          nullable: true
       additionalProperties: false
       description: Reference item.
     ReferenceTableItem:
@@ -4829,6 +4835,10 @@ components:
           type: integer
           description: Count value
           format: int64
+        abbreviation:
+          type: string
+          description: Abbreviation
+          nullable: true
       description: Basic table information.
     RegistryTokenCreatePayload:
       required:
