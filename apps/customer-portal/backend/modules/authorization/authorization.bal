@@ -73,6 +73,35 @@ public isolated function getUserInfoFromRequest(http:Request req) returns UserIn
     };
 }
 
+# Validates user info from raw token strings.
+# Used when tokens are received outside of standard HTTP headers (e.g., via Sec-WebSocket-Protocol).
+#
+# + jwtAssertion - The JWT assertion token (x-jwt-assertion equivalent)
+# + userIdToken - The user ID token (x-user-id-token equivalent)
+# + return - UserInfoPayload on success or error on validation failure
+public isolated function getUserInfoFromTokens(string jwtAssertion, string userIdToken) returns UserInfoPayload|error {
+    jwt:Payload|error payload = jwt:validate(jwtAssertion, jwtConfig.cloneReadOnly());
+    if payload is error {
+        string errorMsg = "Invalid or expired token!";
+        log:printError(errorMsg, payload);
+        return error(errorMsg);
+    }
+
+    CustomJwtPayload|error payloadData = payload.cloneWithType(CustomJwtPayload);
+    if payloadData is error {
+        string errorMsg = "Malformed JWT payload!";
+        log:printError(errorMsg, payloadData);
+        return error(errorMsg);
+    }
+
+    return {
+        email: payloadData.email,
+        groups: payloadData.groups,
+        userId: payloadData.userid,
+        idToken: jwtAssertion
+    };
+}
+
 # To handle authorization for each resource function invocation.
 public isolated service class JwtInterceptor {
 

@@ -4523,20 +4523,47 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
 }
 
 # WebSocket service to proxy messages between the browser and the upstream Python AI chat agent for real-time communication in chat sessions.
+@websocket:ServiceConfig {
+    subProtocols: ["WSO2 Developer Platform-oauth2-token", "choreo-test-key"]
+}
 isolated service / on new websocket:Listener(wsPort) {
 
     # Upgrade an HTTP request to WebSocket for a given chat session.
     #
-    # + req - The HTTP request containing JWT headers for authentication
+    # + req - The HTTP request for the WebSocket upgrade
     # + sessionId - Account/project ID passed as a query parameter
     # + return - WebSocket service or upgrade error
     isolated resource function get ws(http:Request req, string sessionId) returns websocket:Service|websocket:UpgradeError {
-        authorization:UserInfoPayload|error userInfo = authorization:getUserInfoFromRequest(req);
-        if userInfo is error {
+        // Try standard headers first (e.g., Choreo gateway injects them).
+        boolean hasAuthHeaders = req.hasHeader(authorization:JWT_ASSERTION_HEADER)
+            && req.hasHeader(authorization:USER_ID_TOKEN_HEADER);
+        if hasAuthHeaders {
+            authorization:UserInfoPayload|error userInfo = authorization:getUserInfoFromRequest(req);
+            if userInfo is error {
+                return error websocket:UpgradeError(ERR_MSG_UNAUTHORIZED_ACCESS);
+            }
+            log:printInfo(string `WebSocket upgrade for account/project: ${sessionId}`);
+            return new WsProxyService(sessionId, userInfo);
+        }
+
+        // Fallback: extract tokens from Sec-WebSocket-Protocol header.
+        // Format: "WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>"
+        string|error protocolHeader = req.getHeader("Sec-WebSocket-Protocol");
+        if protocolHeader is error {
             return error websocket:UpgradeError(ERR_MSG_USER_INFO_HEADER_NOT_FOUND);
         }
-        log:printInfo(string `WebSocket upgrade for account/project: ${sessionId}`);
-        return new WsProxyService(sessionId, userInfo);
+        string[] parts = re `,`.split(protocolHeader);
+        if parts.length() < 3 {
+            return error websocket:UpgradeError("Invalid Sec-WebSocket-Protocol format. Expected: WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>");
+        }
+        string accessToken = parts[1].trim();
+        string userIdToken = parts[2].trim();
+        authorization:UserInfoPayload|error wsUserInfo = authorization:getUserInfoFromTokens(accessToken, userIdToken);
+        if wsUserInfo is error {
+            return error websocket:UpgradeError(ERR_MSG_UNAUTHORIZED_ACCESS);
+        }
+        log:printInfo(string `WebSocket upgrade via Sec-WebSocket-Protocol for project: ${sessionId}`);
+        return new WsProxyService(sessionId, wsUserInfo);
     }
 }
 
