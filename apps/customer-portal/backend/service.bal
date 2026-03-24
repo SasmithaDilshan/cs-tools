@@ -4534,18 +4534,6 @@ isolated service / on new websocket:Listener(wsPort) {
     # + sessionId - Account/project ID passed as a query parameter
     # + return - WebSocket service or upgrade error
     isolated resource function get ws(http:Request req, string sessionId) returns websocket:Service|websocket:UpgradeError {
-        // Try standard headers first (e.g., Choreo gateway injects them).
-        boolean hasAuthHeaders = req.hasHeader(authorization:JWT_ASSERTION_HEADER)
-            && req.hasHeader(authorization:USER_ID_TOKEN_HEADER);
-        if hasAuthHeaders {
-            authorization:UserInfoPayload|error userInfo = authorization:getUserInfoFromRequest(req);
-            if userInfo is error {
-                return error websocket:UpgradeError(ERR_MSG_UNAUTHORIZED_ACCESS);
-            }
-            log:printInfo(string `WebSocket upgrade for account/project: ${sessionId}`);
-            return new WsProxyService(sessionId, userInfo);
-        }
-
         // Fallback: extract tokens from Sec-WebSocket-Protocol header.
         // Format: "WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>"
         string|error protocolHeader = req.getHeader("Sec-WebSocket-Protocol");
