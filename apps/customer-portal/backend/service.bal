@@ -4524,7 +4524,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
 
 # WebSocket service to proxy messages between the browser and the upstream Python AI chat agent for real-time communication in chat sessions.
 @websocket:ServiceConfig {
-    subProtocols: ["WSO2 Developer Platform-oauth2-token", "choreo-test-key"]
+    subProtocols: ["wso2-developer-platform-oauth2-token", "choreo-test-key"]
 }
 isolated service / on new websocket:Listener(wsPort) {
 
@@ -4535,14 +4535,14 @@ isolated service / on new websocket:Listener(wsPort) {
     # + return - WebSocket service or upgrade error
     isolated resource function get ws(http:Request req, string sessionId) returns websocket:Service|websocket:UpgradeError {
         // Fallback: extract tokens from Sec-WebSocket-Protocol header.
-        // Format: "WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>"
+        // Format: "wso2-developer-platform-oauth2-token, <accessToken>, <userIdToken>"
         string|error protocolHeader = req.getHeader("Sec-WebSocket-Protocol");
         if protocolHeader is error {
             return error websocket:UpgradeError(ERR_MSG_USER_INFO_HEADER_NOT_FOUND);
         }
         string[] parts = re `,`.split(protocolHeader);
         if parts.length() < 3 {
-            return error websocket:UpgradeError("Invalid Sec-WebSocket-Protocol format. Expected: WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>");
+            return error websocket:UpgradeError("Invalid Sec-WebSocket-Protocol format. Expected: wso2-developer-platform-oauth2-token, <accessToken>, <userIdToken>");
         }
         string accessToken = parts[1].trim();
         string userIdToken = parts[2].trim();
