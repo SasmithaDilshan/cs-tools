@@ -29,6 +29,7 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import useGetProjectFilters from "@api/useGetProjectFilters";
 import useGetProjectDetails from "@api/useGetProjectDetails";
+import { useAuthApiClient } from "@api/useAuthApiClient";
 import { useGetProjectDeployments } from "@api/useGetProjectDeployments";
 import { useGetDeploymentsProducts } from "@api/useGetDeploymentsProducts";
 import { usePostCase } from "@api/usePostCase";
@@ -57,13 +58,16 @@ import {
 } from "@utils/caseCreation";
 import { isCreatedCaseSecurityReport } from "@utils/support";
 import {
+  refreshCaseQueriesAfterCreation,
+  triggerPostCreationApiCalls,
+} from "@utils/caseRefresh";
+import {
   CaseSeverity,
   CaseSeverityLevel,
   CaseType,
 } from "@constants/supportConstants";
 import { SecurityTab } from "@constants/securityConstants";
 import { PROJECT_TYPE_LABELS } from "@constants/projectDetailsConstants";
-import { ApiQueryKeys } from "@constants/apiConstants";
 import { escapeHtml, htmlToPlainText } from "@utils/richTextEditor";
 import UploadAttachmentModal from "@components/support/case-details/attachments-tab/UploadAttachmentModal";
 import { ROUTE_PREVIOUS_PAGE } from "@/constants/commonConstants";
@@ -184,6 +188,7 @@ export default function CreateCasePage(): JSX.Element {
   const { showError } = useErrorBanner();
   const { showSuccess } = useSuccessBanner();
   const { mutate: postCase, isPending: isCreatePending } = usePostCase();
+  const authFetch = useAuthApiClient();
   const logger = useLogger();
 
   useEffect(() => {
@@ -730,22 +735,18 @@ export default function CreateCasePage(): JSX.Element {
 
         showSuccess("Case created successfully");
 
-        await Promise.all([
-          queryClient.refetchQueries({
-            queryKey: [ApiQueryKeys.CASES_STATS, projectId],
-            type: "active",
-          }),
-          queryClient.refetchQueries({
-            queryKey: [ApiQueryKeys.PROJECT_CASES],
-            type: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: [ApiQueryKeys.CASES_STATS, projectId],
-          }),
-          queryClient.invalidateQueries({
-            queryKey: [ApiQueryKeys.PROJECT_CASES],
-          }),
-        ]);
+        if (projectId) {
+          await triggerPostCreationApiCalls(
+            authFetch,
+            projectId,
+            CaseType.DEFAULT_CASE,
+          );
+          await refreshCaseQueriesAfterCreation(
+            queryClient,
+            projectId,
+            CaseType.DEFAULT_CASE,
+          );
+        }
 
         // Clean up sessionStorage safely
         try {
