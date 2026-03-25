@@ -966,13 +966,12 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
         }
         types:OverallConversationStats mappedConversationStats = getConversationStats(conversationStats);
 
-        int? ongoingCases = getOngoingCasesCount(caseStats);
-
         return {
-            ongoingCases: ongoingCases is int ? ongoingCases : (),
+            ongoingCases: caseStats is entity:ProjectCaseStatsResponse ? caseStats.activeCount : (),
             activeChats:
                 conversationStats is entity:ProjectConversationStatsResponse ? conversationStats.activeCount : (),
-            sessionChats: mappedConversationStats.sessionCount,
+            resolvedPast30DaysCasesCount:
+                caseStats is entity:ProjectCaseStatsResponse ? caseStats.resolvedCount.pastThirtyDays : (),
             resolvedChats: mappedConversationStats.resolvedCount
         };
     }
