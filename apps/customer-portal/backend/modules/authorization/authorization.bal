@@ -101,14 +101,14 @@ public isolated function getUserInfoFromRequest(http:Request req) returns UserIn
 # + userIdToken - The user ID token (x-user-id-token equivalent)
 # + return - UserInfoPayload on success or error on validation failure
 public isolated function getUserInfoFromTokens(string jwtAssertion, string userIdToken) returns UserInfoPayload|error {
-    [jwt:Header, jwt:Payload]|jwt:Error result = jwt:decode(jwtAssertion);
-    if result is jwt:Error {
-        string errorMsg = "Error while reading the Invoker info!";
-        log:printError(errorMsg, result);
+    jwt:Payload|error payload = jwt:validate(jwtAssertion, jwtConfig.cloneReadOnly());
+    if payload is error {
+        string errorMsg = "Invalid or expired token!";
+        log:printError(errorMsg, payload);
         return error(errorMsg);
     }
 
-    CustomJwtPayload|error payloadData = result[1].cloneWithType(CustomJwtPayload);
+    CustomJwtPayload|error payloadData = payload.cloneWithType(CustomJwtPayload);
     if payloadData is error {
         string errorMsg = "Malformed JWT payload!";
         log:printError(errorMsg, payloadData);
