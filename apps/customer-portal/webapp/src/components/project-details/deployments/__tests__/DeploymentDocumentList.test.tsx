@@ -20,6 +20,8 @@ import { describe, it, expect, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DeploymentDocumentList from "@components/project-details/deployments/DeploymentDocumentList";
 import type { DeploymentDocument } from "@models/responses";
+import { ErrorBannerProvider } from "@context/error-banner/ErrorBannerContext";
+import LoggerProvider from "@context/logger/LoggerProvider";
 
 const mockDocuments: DeploymentDocument[] = [
   {
@@ -113,7 +115,11 @@ const queryClient = new QueryClient({
 
 function renderWithProviders(ui: ReactElement) {
   return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <LoggerProvider config={{ level: "ERROR", prefix: "Test" }}>
+        <ErrorBannerProvider>{ui}</ErrorBannerProvider>
+      </LoggerProvider>
+    </QueryClientProvider>,
   );
 }
 
