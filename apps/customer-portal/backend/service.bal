@@ -4523,9 +4523,9 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
 }
 
 # WebSocket service to proxy messages between the browser and the upstream Python AI chat agent for real-time communication in chat sessions.
-# Browsers cannot send custom headers during the WebSocket handshake. The x-user-id-token
-# required for entity API calls is passed as a subprotocol in the Sec-WebSocket-Protocol header.
-# Format: sec-websocket-protocol: WSO2 Developer Platform-oauth2-token, {access token}, {x-user-id-token}
+@websocket:ServiceConfig {
+    subProtocols: ["wso2-developer-platform-oauth2-token", "choreo-test-key"]
+}
 isolated service / on new websocket:Listener(wsPort) {
 
     # Upgrade an HTTP request to WebSocket for a given chat session.
@@ -4534,40 +4534,27 @@ isolated service / on new websocket:Listener(wsPort) {
     # + sessionId - Account/project ID passed as a query parameter
     # + return - WebSocket service or upgrade error
     isolated resource function get ws(http:Request req, string sessionId) returns websocket:Service|websocket:UpgradeError {
-        log:printInfo(string `WebSocket upgrade request received for project: ${sessionId}`);
-        // Try standard header first (e.g., when Choreo gateway injects it).
-        string userIdToken;
-        string|error headerToken = req.getHeader(authorization:USER_ID_TOKEN_HEADER);
-        if headerToken is string {
-            log:printInfo(string `Using x-user-id-token from standard header for project: ${sessionId}`);
-            userIdToken = headerToken;
-        } else {
-            // Fallback: extract x-user-id-token from Sec-WebSocket-Protocol header.
-            // Format: "WSO2 Developer Platform-oauth2-token, <accessToken>, <x-user-id-token>"
-            log:printInfo(string `Standard header not found, extracting x-user-id-token from Sec-WebSocket-Protocol for project: ${sessionId}`);
-            string|error protocolHeader = req.getHeader("Sec-WebSocket-Protocol");
-            if protocolHeader is error {
-                log:printError(string `Missing Sec-WebSocket-Protocol header for project: ${sessionId}`);
-                return error websocket:UpgradeError(ERR_MSG_USER_INFO_HEADER_NOT_FOUND);
-            }
-            string[] parts = re `,`.split(protocolHeader);
-            if parts.length() < 3 {
-                log:printError(string `Invalid Sec-WebSocket-Protocol format for project: ${sessionId}, parts: ${parts.length()}`);
-                return error websocket:UpgradeError(
-                    "Invalid Sec-WebSocket-Protocol format. Expected: WSO2 Developer Platform-oauth2-token, <accessToken>, <x-user-id-token>");
-            }
-            userIdToken = parts[2].trim();
-            log:printInfo(string `Extracted x-user-id-token from Sec-WebSocket-Protocol for project: ${sessionId}, token: ${userIdToken}`);
-
+        // Fallback: extract tokens from Sec-WebSocket-Protocol header.
+        // Format: "WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>"
+        string|error protocolHeader = req.getHeader("Sec-WebSocket-Protocol");
+        if protocolHeader is error {
+            log:printError(string `No Sec-WebSocket-Protocol header found for project: ${sessionId}`);
+            return error websocket:UpgradeError(ERR_MSG_USER_INFO_HEADER_NOT_FOUND);
         }
-        // Decode the user ID token to extract user info (email, userId)
-        authorization:UserInfoPayload|error userInfo = authorization:getUserInfoFromTokens(userIdToken, userIdToken);
-        if userInfo is error {
-            log:printError(string `WebSocket auth failed for project: ${sessionId}`, userInfo);
+        log:printInfo(string `Raw Sec-WebSocket-Protocol header: ${protocolHeader}`);
+        string[] parts = re `,`.split(protocolHeader);
+        log:printInfo(string `Sec-WebSocket-Protocol parts count: ${parts.length()}`);
+        if parts.length() < 3 {
+            return error websocket:UpgradeError("Invalid Sec-WebSocket-Protocol format. Expected: WSO2 Developer Platform-oauth2-token, <accessToken>, <userIdToken>");
+        }
+        string accessToken = parts[1].trim();
+        string userIdToken = parts[2].trim();
+        authorization:UserInfoPayload|error wsUserInfo = authorization:getUserInfoFromTokens(accessToken, userIdToken);
+        if wsUserInfo is error {
             return error websocket:UpgradeError(ERR_MSG_UNAUTHORIZED_ACCESS);
         }
-        log:printInfo(string `WebSocket upgrade successful for project: ${sessionId}, user: ${userInfo.email}`);
-        return new WsProxyService(sessionId, userInfo);
+        log:printInfo(string `WebSocket upgrade via Sec-WebSocket-Protocol for project: ${sessionId}`);
+        return new WsProxyService(sessionId, wsUserInfo);
     }
 }
 
@@ -4671,7 +4658,7 @@ isolated service class WsProxyService {
         } else {
             enrichedPayload = data;
         }
-
+        
         // Stream the conversation message to the upstream AI chat agent and get the final response
         map<json>|error result = ai_chat_agent:streamChat(sessionId, enrichedPayload, caller);
         lock {
