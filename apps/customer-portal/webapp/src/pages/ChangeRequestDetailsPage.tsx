@@ -15,7 +15,7 @@
 // under the License.
 
 import { useParams, useNavigate, useLocation } from "react-router";
-import { type JSX, useMemo } from "react";
+import { type JSX, useMemo, useState } from "react";
 import {
   Box,
   Button,
@@ -41,11 +41,15 @@ import {
   Shield,
   Download,
   ExternalLink,
+  CalendarClock,
+  FileCheck,
+  X,
 } from "@wso2/oxygen-ui-icons-react";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
 import ErrorStateIcon from "@components/common/error-state/ErrorStateIcon";
 import useGetChangeRequestDetails from "@api/useGetChangeRequestDetails";
 import ScheduledMaintenanceWindowCard from "@components/support/change-requests/ScheduledMaintenanceWindowCard";
+import ProposeNewImplementationTimeModal from "@components/support/change-requests/ProposeNewImplementationTimeModal";
 import { generateChangeRequestDetailsPdf } from "@utils/changeRequestDetailsPdf";
 import {
   formatImpactLabel,
@@ -96,6 +100,7 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
   const basePath = location.pathname.includes("/operations/") ? "operations" : "support";
 
   const { showError } = useErrorBanner();
+  const [proposeTimeOpen, setProposeTimeOpen] = useState(false);
 
   const {
     data: changeRequest,
@@ -218,6 +223,14 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
     changeRequest?.state?.label,
   );
 
+  const handleApproveChange = () => {
+    // TODO: wire API action when backend flow is finalized.
+  };
+
+  const handleRejectChange = () => {
+    // TODO: wire API action when backend flow is finalized.
+  };
+
   // Render state icon based on state label
   const renderStateIcon = () => {
     const IconComponent = getChangeRequestStateIcon(
@@ -232,15 +245,24 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {/* Header Skeleton */}
         <Paper variant="outlined" sx={{ p: 4 }}>
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-            }}
-          >
-            <Box sx={{ flex: 1 }}>
-              <Skeleton variant="text" width="60%" height={40} sx={{ mb: 1 }} />
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+            <Box sx={{ width: "100%" }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                  gap: 1,
+                  mb: 1,
+                }}
+              >
+                <Skeleton variant="text" width="60%" height={40} />
+                <Stack direction="row" spacing={1}>
+                  <Skeleton variant="rounded" width={100} height={24} />
+                  <Skeleton variant="rounded" width={100} height={24} />
+                </Stack>
+              </Box>
               <Stack
                 direction="row"
                 spacing={1.5}
@@ -250,11 +272,12 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
                 <Skeleton variant="text" width={150} />
                 <Skeleton variant="text" width={200} />
               </Stack>
+              <Stack direction="row" spacing={1} sx={{ mt: 1.5, justifyContent: "flex-end" }}>
+                <Skeleton variant="rounded" width={130} height={32} />
+                <Skeleton variant="rounded" width={130} height={32} />
+                <Skeleton variant="rounded" width={95} height={32} />
+              </Stack>
             </Box>
-            <Stack direction="row" spacing={1}>
-              <Skeleton variant="rounded" width={100} height={24} />
-              <Skeleton variant="rounded" width={100} height={24} />
-            </Stack>
           </Box>
         </Paper>
 
@@ -334,15 +357,24 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {/* Header Skeleton */}
         <Paper variant="outlined" sx={{ p: 4 }}>
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-            }}
-          >
-            <Box sx={{ flex: 1 }}>
-              <Skeleton variant="text" width="60%" height={40} sx={{ mb: 1 }} />
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+            <Box sx={{ width: "100%" }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                  gap: 1,
+                  mb: 1,
+                }}
+              >
+                <Skeleton variant="text" width="60%" height={40} />
+                <Stack direction="row" spacing={1}>
+                  <Skeleton variant="rounded" width={100} height={24} />
+                  <Skeleton variant="rounded" width={100} height={24} />
+                </Stack>
+              </Box>
               <Stack
                 direction="row"
                 spacing={1.5}
@@ -352,11 +384,12 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
                 <Skeleton variant="text" width={150} />
                 <Skeleton variant="text" width={200} />
               </Stack>
+              <Stack direction="row" spacing={1} sx={{ mt: 1.5, justifyContent: "flex-end" }}>
+                <Skeleton variant="rounded" width={130} height={32} />
+                <Skeleton variant="rounded" width={130} height={32} />
+                <Skeleton variant="rounded" width={95} height={32} />
+              </Stack>
             </Box>
-            <Stack direction="row" spacing={1}>
-              <Skeleton variant="rounded" width={100} height={24} />
-              <Skeleton variant="rounded" width={100} height={24} />
-            </Stack>
           </Box>
         </Paper>
 
@@ -433,89 +466,162 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
           <Box
             sx={{
               display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              flexDirection: { xs: "column", sm: "row" },
-              gap: 2,
+              flexDirection: "column",
+              gap: 1.5,
             }}
           >
-            <Box sx={{ flex: 1 }}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1, flexWrap: "wrap" }}>
-                <Typography variant="h5" color="text.primary">
-                  {changeRequest.title || "Not Available"}
-                </Typography>
-                {changeRequest.hasServiceOutage && (
-                  <Chip
-                    label="Service Outage"
-                    size="small"
-                    sx={{
-                      bgcolor: alpha(colors.red[500], 0.1),
-                      color: colors.red[800],
-                      borderColor: alpha(colors.red[500], 0.2),
-                      border: "1px solid",
-                    }}
-                  />
-                )}
+            <Box sx={{ width: "100%" }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 1,
+                  mb: 1,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                  <Typography variant="h5" color="text.primary">
+                    {changeRequest.title || "Not Available"}
+                  </Typography>
+                  {changeRequest.hasServiceOutage && (
+                    <Chip
+                      label="Service Outage"
+                      size="small"
+                      sx={{
+                        bgcolor: alpha(colors.red[500], 0.1),
+                        color: colors.red[800],
+                        borderColor: alpha(colors.red[500], 0.2),
+                        border: "1px solid",
+                      }}
+                    />
+                  )}
+                </Box>
+                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {changeRequest.impact?.label &&
+                    typeof changeRequest.impact.label === "string" && (
+                      <Chip
+                        label={formatImpactLabel(changeRequest.impact.label)}
+                        size="small"
+                        sx={{
+                          bgcolor: impactColor.bg,
+                          color: impactColor.text,
+                          borderColor: impactColor.border,
+                          border: "1px solid",
+                        }}
+                      />
+                    )}
+                  {changeRequest.state?.label &&
+                    typeof changeRequest.state.label === "string" && (
+                      <Chip
+                        icon={renderStateIcon()}
+                        label={String(changeRequest.state.label)}
+                        size="small"
+                        sx={{
+                          bgcolor: statusColor.bg,
+                          color: statusColor.text,
+                          borderColor: statusColor.border,
+                          border: "1px solid",
+                          "& .MuiChip-icon": {
+                            color: statusColor.text,
+                          },
+                        }}
+                      />
+                    )}
+                </Box>
               </Box>
               <Box
                 sx={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 1.5,
-                  fontSize: "0.875rem",
-                  color: "text.secondary",
+                  justifyContent: "space-between",
+                  gap: 2,
                   flexWrap: "wrap",
+                  width: "100%",
                 }}
               >
-                <Typography variant="body2" fontWeight={600} color="text.primary">
-                  {changeRequest.number}
-                </Typography>
-                <Typography variant="body2" color="text.disabled">
-                  |
-                </Typography>
-                <Typography variant="body2">
-                  Service Request: {changeRequest.case?.number || "Not Available"}
-                </Typography>
-                <Typography variant="body2" color="text.disabled">
-                  |
-                </Typography>
-                <Typography variant="body2">
-                  Created {changeRequest.createdOn}
-                </Typography>
-              </Box>
-            </Box>
-
-            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-              {changeRequest.impact?.label &&
-                typeof changeRequest.impact.label === "string" && (
-                  <Chip
-                    label={formatImpactLabel(changeRequest.impact.label)}
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1.5,
+                    fontSize: "0.875rem",
+                    color: "text.secondary",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Typography variant="body2" fontWeight={600} color="text.primary">
+                    {changeRequest.number}
+                  </Typography>
+                  <Typography variant="body2" color="text.disabled">
+                    |
+                  </Typography>
+                  <Typography variant="body2">
+                    Service Request:{" "}
+                    {changeRequest.case?.number || "Not Available"}
+                  </Typography>
+                  <Typography variant="body2" color="text.disabled">
+                    |
+                  </Typography>
+                  <Typography variant="body2">
+                    Created {changeRequest.createdOn}
+                  </Typography>
+                </Box>
+                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                  <Button
                     size="small"
+                    variant="outlined"
+                    startIcon={<CalendarClock size={14} aria-hidden />}
+                    onClick={() => setProposeTimeOpen(true)}
                     sx={{
-                      bgcolor: impactColor.bg,
-                      color: impactColor.text,
-                      borderColor: impactColor.border,
-                      border: "1px solid",
-                    }}
-                  />
-                )}
-              {changeRequest.state?.label &&
-                typeof changeRequest.state.label === "string" && (
-                  <Chip
-                    icon={renderStateIcon()}
-                    label={String(changeRequest.state.label)}
-                    size="small"
-                    sx={{
-                      bgcolor: statusColor.bg,
-                      color: statusColor.text,
-                      borderColor: statusColor.border,
-                      border: "1px solid",
-                      "& .MuiChip-icon": {
-                        color: statusColor.text,
+                      height: 32,
+                      color: colors.blue[700],
+                      borderColor: colors.blue[300],
+                      "&:hover": {
+                        bgcolor: alpha(colors.blue[500], 0.08),
+                        borderColor: colors.blue[400],
                       },
                     }}
-                  />
-                )}
+                  >
+                    Propose New Time
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<FileCheck size={14} aria-hidden />}
+                    onClick={handleApproveChange}
+                    sx={{
+                      height: 32,
+                      color: colors.green[800],
+                      borderColor: colors.green[300],
+                      "&:hover": {
+                        bgcolor: alpha(colors.green[500], 0.08),
+                        borderColor: colors.green[400],
+                      },
+                    }}
+                  >
+                    Approve Change
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<X size={14} aria-hidden />}
+                    onClick={handleRejectChange}
+                    sx={{
+                      height: 32,
+                      color: colors.red[800],
+                      borderColor: colors.red[300],
+                      "&:hover": {
+                        bgcolor: alpha(colors.red[500], 0.08),
+                        borderColor: colors.red[400],
+                      },
+                    }}
+                  >
+                    Reject
+                  </Button>
+                </Stack>
+              </Box>
             </Box>
           </Box>
         </Paper>
@@ -534,7 +640,9 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
         {/* Left Column - Scrollable Content */}
         <Box sx={{ flex: 1, overflow: { xs: "visible", md: "auto" }, display: "flex", flexDirection: "column", gap: 2 }}>
           {/* Scheduled Maintenance Window Card */}
-          <ScheduledMaintenanceWindowCard changeRequest={changeRequest} />
+          <ScheduledMaintenanceWindowCard
+            changeRequest={changeRequest}
+          />
 
           {/* Deployment & Component Card */}
           <Paper variant="outlined">
@@ -955,6 +1063,12 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
           </Paper>
         </Box>
       </Box>
+
+      <ProposeNewImplementationTimeModal
+        open={proposeTimeOpen}
+        onClose={() => setProposeTimeOpen(false)}
+        changeRequest={changeRequest}
+      />
     </Box>
   );
 }

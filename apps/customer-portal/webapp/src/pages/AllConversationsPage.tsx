@@ -61,6 +61,9 @@ export default function AllConversationsPage(): JSX.Element {
   const [searchTerm, setSearchTerm] = useState("");
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<AllConversationsFilterValues>({});
+  const [sortField, setSortField] = useState<"createdOn" | "updatedOn">(
+    "updatedOn",
+  );
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -79,11 +82,11 @@ export default function AllConversationsPage(): JSX.Element {
         limit: pageSize,
       },
       sortBy: {
-        field: "updatedOn",
+        field: sortField,
         order: sortOrder,
       },
     }),
-    [searchTerm, filters.stateId, page, pageSize, sortOrder, createdByMe],
+    [searchTerm, filters.stateId, page, pageSize, sortField, sortOrder, createdByMe],
   );
 
   const {
@@ -168,6 +171,11 @@ export default function AllConversationsPage(): JSX.Element {
     setPage(1);
   };
 
+  const handleSortFieldChange = (value: "createdOn" | "updatedOn") => {
+    setSortField(value);
+    setPage(1);
+  };
+
   const handleSearchChange = (value: string) => {
     setSearchTerm(value);
     setPage(1);
@@ -225,7 +233,28 @@ export default function AllConversationsPage(): JSX.Element {
         </Typography>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="sort-label">Sort</InputLabel>
+            <InputLabel id="conversation-sort-by-label">Sort by</InputLabel>
+            <Select<"createdOn" | "updatedOn">
+              labelId="conversation-sort-by-label"
+              id="conversation-sort-by"
+              value={sortField}
+              label="Sort by"
+              onChange={(e) =>
+                handleSortFieldChange(
+                  e.target.value as "createdOn" | "updatedOn",
+                )
+              }
+            >
+              <MenuItem value="updatedOn">
+                <Typography variant="body2">Updated date</Typography>
+              </MenuItem>
+              <MenuItem value="createdOn">
+                <Typography variant="body2">Created date</Typography>
+              </MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel id="sort-label">Order By</InputLabel>
             <Select<"desc" | "asc">
               labelId="sort-label"
               id="sort"
