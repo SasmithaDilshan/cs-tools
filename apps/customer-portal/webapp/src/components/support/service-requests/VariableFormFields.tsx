@@ -235,14 +235,21 @@ export default function VariableFormFields({
 
   if (isLoading) {
     return (
-      <Paper variant="outlined" sx={{ p: 3, borderRadius: 0 }}>
-        <Typography variant="h6" sx={{ mb: 2 }}>
-          Request Details
-        </Typography>
+      <Paper sx={{ p: 3 }}>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            mb: 3,
+          }}
+        >
+          <Typography variant="h6">Request Details</Typography>
+        </Box>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <Skeleton variant="rounded" height={56} sx={{ borderRadius: 0 }} />
-          <Skeleton variant="rounded" height={56} sx={{ borderRadius: 0 }} />
-          <Skeleton variant="rounded" height={80} sx={{ borderRadius: 0 }} />
+          <Skeleton variant="rounded" height={56} sx={{ maxWidth: "100%" }} />
+          <Skeleton variant="rounded" height={56} sx={{ maxWidth: "100%" }} />
+          <Skeleton variant="rounded" height={80} sx={{ maxWidth: "100%" }} />
         </Box>
       </Paper>
     );
@@ -250,10 +257,17 @@ export default function VariableFormFields({
 
   if (!sortedVariables.length) {
     return (
-      <Paper variant="outlined" sx={{ p: 3, borderRadius: 0 }}>
-        <Typography variant="h6" sx={{ mb: 2 }}>
-          Request Details
-        </Typography>
+      <Paper sx={{ p: 3 }}>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            mb: 3,
+          }}
+        >
+          <Typography variant="h6">Request Details</Typography>
+        </Box>
         <Typography variant="body2" color="text.secondary">
           No additional fields required for this request type.
         </Typography>
@@ -290,7 +304,6 @@ export default function VariableFormFields({
               displayEmpty
               disabled={isContext}
               renderValue={(v) => v || "Select..."}
-              sx={{ borderRadius: 0 }}
             >
               <MenuItem value="">
                 <em>Select...</em>
@@ -344,9 +357,6 @@ export default function VariableFormFields({
             value={displayValue}
             onChange={(e) => onChange(variable.id, e.target.value)}
             disabled={isContext}
-            sx={{
-              "& .MuiOutlinedInput-root": { borderRadius: 0 },
-            }}
           />
         </Grid>
       );
@@ -364,9 +374,6 @@ export default function VariableFormFields({
             value={displayValue}
             onChange={(e) => onChange(variable.id, e.target.value)}
             disabled={isContext}
-            sx={{
-              "& .MuiOutlinedInput-root": { borderRadius: 0 },
-            }}
           />
         </Grid>
       );
@@ -385,7 +392,7 @@ export default function VariableFormFields({
                 size="small"
                 startIcon={<Upload size={16} />}
                 component="label"
-                sx={{ borderRadius: 0, alignSelf: "flex-start" }}
+                sx={{ alignSelf: "flex-start" }}
               >
                 <input
                   type="file"
@@ -410,7 +417,7 @@ export default function VariableFormFields({
                 size="small"
                 startIcon={<Upload size={16} />}
                 onClick={onAttachmentClick}
-                sx={{ borderRadius: 0, alignSelf: "flex-start" }}
+                sx={{ alignSelf: "flex-start" }}
               >
                 Add attachment
               </Button>
@@ -427,7 +434,6 @@ export default function VariableFormFields({
                       py: 0.5,
                       px: 1,
                       bgcolor: "action.hover",
-                      borderRadius: 0,
                     }}
                   >
                     <Typography variant="body2" sx={{ flex: 1 }} noWrap>
@@ -438,7 +444,6 @@ export default function VariableFormFields({
                         size="small"
                         onClick={() => onAttachmentRemove(idx)}
                         aria-label={`Remove ${item.file.name}`}
-                        sx={{ borderRadius: 0 }}
                       >
                         <X size={14} />
                       </IconButton>
@@ -465,20 +470,23 @@ export default function VariableFormFields({
           value={displayValue}
           onChange={(e) => onChange(variable.id, e.target.value)}
           disabled={isContext}
-          sx={{
-            "& .MuiOutlinedInput-root": { borderRadius: 0 },
-          }}
         />
       </Grid>
     );
   };
 
   return (
-    <Paper variant="outlined" sx={{ p: 3, borderRadius: 0 }}>
-      <Box sx={{ mb: 2 }}>
-        <Typography variant="h6" sx={{ mb: 0.5 }}>
-          Request Details
-        </Typography>
+    <Paper sx={{ p: 3 }}>
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          mb: 3,
+          gap: 0.5,
+        }}
+      >
+        <Typography variant="h6">Request Details</Typography>
         {selectedRequestTypeLabel && (
           <Typography variant="body2" color="text.secondary">
             Service request type: {selectedRequestTypeLabel}
@@ -486,10 +494,7 @@ export default function VariableFormFields({
         )}
       </Box>
 
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
-        <Box component="span" sx={{ color: "error.main", fontWeight: 600 }}>*</Box> Indicates required
-      </Typography>
-
+      
       {contextFieldsForDisplay.length > 0 && contextValues && (
         <Box sx={{ mb: 3 }}>
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
@@ -508,9 +513,6 @@ export default function VariableFormFields({
                   size="small"
                   value={getContextValue(v.questionText, contextValues)}
                   disabled
-                  sx={{
-                    "& .MuiOutlinedInput-root": { borderRadius: 0 },
-                  }}
                 />
               </Grid>
             ))}
