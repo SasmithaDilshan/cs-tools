@@ -4534,12 +4534,10 @@ isolated service / on new websocket:Listener(wsPort) {
     # + sessionId - Account/project ID passed as a query parameter
     # + return - WebSocket service or upgrade error
     isolated resource function get ws(http:Request req, string sessionId) returns websocket:Service|websocket:UpgradeError {
-        log:printInfo(string `WebSocket upgrade request received for project: ${sessionId}`);
         // Try standard header first (e.g., when Choreo gateway injects it).
         string userIdToken;
         string|error headerToken = req.getHeader(authorization:USER_ID_TOKEN_HEADER);
         if headerToken is string {
-            log:printInfo(string `Using x-user-id-token from standard header for project: ${sessionId}`);
             userIdToken = headerToken;
         } else {
             // Fallback: extract x-user-id-token from Sec-WebSocket-Protocol header.
@@ -4554,7 +4552,6 @@ isolated service / on new websocket:Listener(wsPort) {
             }
             string[] parts = re `,`.split(protocolHeader);
             userIdToken = parts[parts.length() - 1].trim();
-            log:printInfo(string `Extracted x-user-id-token from Sec-WebSocket-Protocol for project: ${sessionId}`);
         }
         // Decode the user ID token to extract user info (email, userId)
         authorization:UserInfoPayload|error userInfo = authorization:getUserInfoFromTokens(userIdToken);
