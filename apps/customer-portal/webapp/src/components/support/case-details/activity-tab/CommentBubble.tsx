@@ -33,6 +33,7 @@ import {
   stripCustomerCommentAddedLabel,
   replaceInlineImageSources,
   formatCommentDate,
+  INLINE_COMMENT_HTML_PURIFY,
 } from "@utils/support";
 import DOMPurify from "dompurify";
 import ChatMessageCard from "@case-details-activity/ChatMessageCard";
@@ -74,7 +75,7 @@ export default function CommentBubble({
   const trimmedBr = trimLeadingBr(afterCode);
   const withoutLabel = stripCustomerCommentAddedLabel(trimmedBr);
   const withImages = replaceInlineImageSources(withoutLabel, comment.inlineAttachments);
-  const htmlContent = DOMPurify.sanitize(withImages);
+  const htmlContent = DOMPurify.sanitize(withImages, INLINE_COMMENT_HTML_PURIFY);
   const displayName = useMemo(() => {
     if (isCurrentUser && userDetails) {
       const { firstName, lastName, email } = userDetails;
