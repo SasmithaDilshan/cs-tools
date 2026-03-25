@@ -65,6 +65,7 @@ import {
   trimLeadingBr,
   stripCustomerCommentAddedLabel,
   replaceInlineImageSources,
+  INLINE_COMMENT_HTML_PURIFY,
   hasDisplayableContent,
   ACTION_TO_CASE_STATE_LABEL,
   getAvailableCaseActions,
@@ -730,7 +731,10 @@ export default function ServiceRequestDetailContent({
                                   withoutLabel,
                                   comment.inlineAttachments,
                                 );
-                                return DOMPurify.sanitize(withImages);
+                                return DOMPurify.sanitize(
+                                  withImages,
+                                  INLINE_COMMENT_HTML_PURIFY,
+                                );
                               })(),
                             }}
                           />
