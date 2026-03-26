@@ -23,7 +23,7 @@ public const PHONE_PATTERN_STRING = "^\\+\\d{10,14}$";
 # [Configurable] Feature flags.
 public type FeatureFlags record {|
     # Indicates if the usage and metrics page is enabled or not
-    boolean metricsPageEnabled;
+    boolean usageMetricsEnabled;
 |};
 
 # Metadata.
