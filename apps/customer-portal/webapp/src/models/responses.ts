@@ -1198,3 +1198,19 @@ export interface IntegrationUser {
   id: string;
   email: string;
 }
+
+// Subscription data within license response.
+export interface SubscriptionData {
+  deploymentId: string;
+  deploymentName: string;
+  subscriptionKey: string;
+  clientId: string;
+  clientSecret: string;
+  secrets: string;
+}
+
+// License response from POST /projects/:projectId/deployments/:deploymentId/license.
+export interface DeploymentLicense {
+  subscriptionData: SubscriptionData;
+  signature: string;
+}
