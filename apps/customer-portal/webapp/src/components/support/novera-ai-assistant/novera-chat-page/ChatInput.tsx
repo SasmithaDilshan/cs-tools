@@ -83,7 +83,8 @@ export default function ChatInput({
         >
           <Button
             onClick={onCreateCase}
-            disabled={isCreateCaseLoading}
+            loading={isCreateCaseLoading}
+            loadingPosition="start"
             variant="outlined"
             size="small"
             color="warning"

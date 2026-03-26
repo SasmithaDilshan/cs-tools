@@ -17,7 +17,6 @@
 import {
   Box,
   Button,
-  CircularProgress,
   Paper,
   Stack,
   Typography,
@@ -97,16 +96,12 @@ export default function EscalationBanner({
             size="small"
             color="warning"
             onClick={onCreateCase}
-            disabled={isLoading || isCreateCaseDisabled}
-            startIcon={
-              isLoading ? (
-                <CircularProgress size={14} color="inherit" />
-              ) : (
-                <FileText size={14} />
-              )
-            }
+            loading={isLoading}
+            loadingPosition="start"
+            disabled={isCreateCaseDisabled}
+            startIcon={<FileText size={14} />}
           >
-            {isLoading ? "Processing" : "Create Case"}
+            Create Case
           </Button>
           <Typography variant="caption" color="text.secondary">
             Skip the chat and create a support case now
