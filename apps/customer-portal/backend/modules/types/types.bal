@@ -20,10 +20,18 @@ import ballerina/constraint;
 
 public const PHONE_PATTERN_STRING = "^\\+\\d{10,14}$";
 
+# Feature flags configuration.
+public type FeatureFlags record {|
+    # Indicates if the usage and metrics page is enabled or not
+    boolean isUsageAndMetricsPageEnabled;
+|};
+
 # Metadata.
 public type MetadataResponse record {|
     # List of available time zones
     ReferenceItem[] timeZones;
+    # Indicate which features are enabled
+    FeatureFlags featureFlags;
 |};
 
 # Cache configuration record.

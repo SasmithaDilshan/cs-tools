@@ -20,6 +20,9 @@ import ballerina/http;
 import ballerina/log;
 
 configurable int stateIdOpen = 1;
+configurable types:FeatureFlags featureFlags = {
+    isUsageAndMetricsPageEnabled: true
+};
 
 # Search cases for a given project.
 #
@@ -886,5 +889,5 @@ public isolated function mapProjectResponse(entity:ProjectResponse response) ret
 public isolated function mapMetadataResponse(entity:MetadataResponse response) returns types:MetadataResponse {
     types:ReferenceItem[] timeZones = from entity:ChoiceListItem item in response.timeZones
         select {id: item.id.toString(), label: item.label};
-    return {timeZones};
+    return {timeZones, featureFlags};
 }
