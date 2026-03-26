@@ -30,7 +30,6 @@ import { useGetConversationMessages } from "@api/useGetConversationMessages";
 import { usePostCaseClassifications } from "@api/usePostCaseClassifications";
 import { useChatWebSocket } from "@api/useChatWebSocket";
 import useGetProjectDetails from "@api/useGetProjectDetails";
-import type { ChatNavState } from "@models/chatNavState";
 import type { SlotState } from "@models/responses";
 import { useAllDeploymentProducts } from "@hooks/useAllDeploymentProducts";
 import {
@@ -50,7 +49,7 @@ import {
   buildEnvProducts,
 } from "@utils/caseCreation";
 import { htmlToPlainText } from "@utils/richTextEditor";
-import type { Message } from "@models/chatTypes";
+import type { ChatNavState, Message } from "@models/chatTypes";
 import ChatHeader from "@components/support/novera-ai-assistant/novera-chat-page/ChatHeader";
 import ChatInput from "@components/support/novera-ai-assistant/novera-chat-page/ChatInput";
 import ChatMessageList from "@components/support/novera-ai-assistant/novera-chat-page/ChatMessageList";

@@ -31,9 +31,9 @@ import { useGetProjectDeployments } from "@api/useGetProjectDeployments";
 import useGetProjectDetails from "@api/useGetProjectDetails";
 import { useAllDeploymentProducts } from "@hooks/useAllDeploymentProducts";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
-import type { ChatNavState } from "@models/chatNavState";
 import { buildEnvProducts } from "@utils/caseCreation";
 import { htmlToPlainText } from "@utils/richTextEditor";
+import type { ChatNavState } from "@/models/chatTypes";
 
 const ISSUE_PLACEHOLDER =
   "Example: I'm experiencing API Gateway timeout issues in our production environment. The errors started appearing yesterday around 3 PM, and we're seeing 504 errors intermittently...";
