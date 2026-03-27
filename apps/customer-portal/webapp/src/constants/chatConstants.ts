@@ -23,7 +23,7 @@ export const NOVERA_ANALYZING_PLACEHOLDER_TEXT =
 export const NOVERA_INITIAL_WELCOME_TEXT =
   "Hi! I'm Novera, your AI support assistant. I'm here to help you resolve your issue quickly. Can you describe the problem you're experiencing?";
 
-export const CHAT_TYPING_INTERVAL_MS = 165;
+export const CHAT_TYPING_INTERVAL_MS = 20;
 export const CHAT_TYPING_CHARS_PER_TICK = 6;
 
 export const VISIBILITY_EVENT_LISTENER = "visibilitychange";
