@@ -28,6 +28,7 @@ export interface ProjectListItem {
     label: string;
   };
   hasAgent: boolean;
+  hasKbReferences?: boolean;
   activeCasesCount: number;
   activeChatsCount: number;
   slaStatus: string;
@@ -135,6 +136,9 @@ export interface ValidateContactResponse {
 // Global metadata response.
 export interface PortalMetadataResponse {
   timeZones: Array<{ id: string; label: string }>;
+  featureFlags?: {
+    usageMetricsEnabled: boolean;
+  };
 }
 
 // Project contact from GET /projects/:projectId/contacts.
@@ -176,8 +180,8 @@ export interface CaseCreationMetadata {
 // Project support statistics.
 export interface ProjectSupportStats {
   ongoingCases: number;
-  resolvedRecently: number;
   resolvedPast30DaysCasesCount: number;
+  resolvedChats: number;
   activeChats: number;
 }
 
@@ -702,8 +706,6 @@ export interface AllCasesFilterValues {
   severityId?: string;
   issueTypes?: string;
   deploymentId?: string;
-  /** Single case type ID when user selects one; when empty, default Incident+Query IDs are used. */
-  caseTypeId?: string;
 }
 
 // Interface for change requests filters state
