@@ -40,12 +40,14 @@ interface CasesTableProps {
   projectId: string;
   excludeS0?: boolean;
   hasAgent?: boolean;
+  includeDeploymentFilter?: boolean;
 }
 
 const CasesTable = ({
   projectId,
   excludeS0 = false,
   hasAgent = false,
+  includeDeploymentFilter = true,
 }: CasesTableProps): JSX.Element => {
   const navigate = useNavigate();
   const { isLoading: isAuthLoading } = useAsgardeo();
@@ -65,7 +67,11 @@ const CasesTable = ({
 
   const dynamicFilterFields: FilterField[] = useMemo(() => {
     return ALL_CASES_FILTER_DEFINITIONS
-      .filter((def) => def.id !== "caseType")
+      .filter(
+        (def) =>
+          def.id !== "caseType" &&
+          (includeDeploymentFilter || def.id !== "deployment"),
+      )
       .map((def) => {
       const { label } = deriveFilterLabels(def.id);
 
@@ -103,7 +109,7 @@ const CasesTable = ({
           options,
         };
       });
-  }, [filtersMetadata, deploymentsData, excludeS0]);
+  }, [filtersMetadata, deploymentsData, excludeS0, includeDeploymentFilter]);
 
   const caseSearchRequest = useMemo(
     () => {
