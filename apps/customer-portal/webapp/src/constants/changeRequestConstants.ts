@@ -29,4 +29,3 @@ export const CHANGE_REQUEST_STATE_ORDER: ChangeRequestState[] = [
   ChangeRequestStates.CLOSED,
   ChangeRequestStates.CANCELED,
 ];
-
