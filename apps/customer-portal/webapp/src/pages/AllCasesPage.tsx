@@ -142,11 +142,12 @@ export default function AllCasesPage(): JSX.Element {
   // Show loader only for initial load (until first stats + cases response), not for background refetches or fetchNextPage.
   const hasStatsResponse = stats !== undefined;
   const hasCasesResponse = data !== undefined;
+  const isProjectContextLoading = isProjectLoading;
   const isStatsLoading =
-    isProjectLoading ||
-    !projectDetailsReady ||
+    isProjectContextLoading ||
     isStatsQueryLoading ||
     (!!projectId && !hasStatsResponse);
+
   const isCasesAreaLoading =
     isCasesQueryLoading ||
     (!!projectId && !hasCasesResponse) ||
@@ -291,7 +292,7 @@ export default function AllCasesPage(): JSX.Element {
         onFilterChange={handleFilterChange}
         onClearFilters={handleClearFilters}
         excludeS0={excludeS0}
-        isProjectContextLoading={isProjectLoading || !projectDetailsReady}
+        isProjectContextLoading={isProjectContextLoading}
       />
 
       {/* Sort and results count */}
