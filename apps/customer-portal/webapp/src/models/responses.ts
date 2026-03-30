@@ -38,6 +38,7 @@ export interface ProjectListItem {
 export interface ProjectDetailsAccount {
   id: string;
   hasAgent?: boolean;
+  hasKbReferences?: boolean;
   name: string;
   activationDate?: string | null;
   deactivationDate?: string | null;
@@ -55,6 +56,7 @@ export interface ProjectDetails {
   description: string;
   createdOn: string;
   hasAgent?: boolean;
+  hasKbReferences?: boolean;
   type: {
     id: string;
     label: string;
