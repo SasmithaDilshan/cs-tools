@@ -272,6 +272,7 @@ export interface PatchChangeRequestRequest {
 // Request body for PATCH /projects/:id.
 export interface PatchProjectRequest {
   hasAgent?: boolean;
+  hasKbReferences?: boolean;
 }
 
 // Request body for creating a registry token (POST /projects/:projectId/registry-tokens).
