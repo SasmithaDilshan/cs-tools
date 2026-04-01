@@ -20,6 +20,12 @@ export interface PaginationRequest {
   limit?: number;
 }
 
+/** Object type where at least one key from T is required. */
+export type AtLeastOne<
+  T,
+  Keys extends keyof T = keyof T,
+> = Keys extends keyof T ? Required<Pick<T, Keys>> & Partial<Omit<T, Keys>> : never;
+
 // Request body for searching projects.
 export interface SearchProjectsRequest {
   filters?: {
@@ -265,11 +271,11 @@ export interface ValidateContactRequest {
 }
 
 // Request body for PATCH /change-requests/:id (update planned start).
-export interface PatchChangeRequestRequest {
+export type PatchChangeRequestRequest = AtLeastOne<{
   plannedStartOn?: string;
   isCustomerApproved?: boolean;
   isCustomerReviewed?: boolean;
-}
+}>;
 
 // Request body for PATCH /projects/:id.
 export interface PatchProjectRequest {
