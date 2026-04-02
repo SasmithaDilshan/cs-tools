@@ -1,7 +1,7 @@
 # Customer Portal
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](../../LICENSE)
-[![GitHub last commit](https://img.shields.io/github/last-commit/wso2-open-operations/cs-tools/dev-app-customer-portal-v1.0.x)](https://github.com/wso2-open-operations/cs-tools/commits/dev-app-customer-portal-v1.0.x)
+[![GitHub last commit](https://img.shields.io/github/last-commit/wso2-open-operations/cs-tools/main)](https://github.com/wso2-open-operations/cs-tools/commits/main)
 [![GitHub issues](https://img.shields.io/github/issues/wso2-open-operations/cs-tools.svg)](https://github.com/wso2-open-operations/cs-tools/issues)
 
 Customer Portal is an open-source solution for customer success operations, built with a modular architecture that combines a Ballerina backend and multiple React frontends. It enables teams to manage customer-facing workflows, project visibility, and support experiences through a unified platform.
