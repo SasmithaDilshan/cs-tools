@@ -30,7 +30,7 @@ import { Clock, Phone } from "@wso2/oxygen-ui-icons-react";
 import { type JSX } from "react";
 import type { CallRequest } from "@models/responses";
 import {
-  formatUtcToLocal,
+  formatCallRequestBackendDateTimeShort,
   getCallRequestStatusColor,
   resolveColorFromTheme,
 } from "@utils/support";
@@ -45,14 +45,11 @@ export interface CallRequestCardProps {
   onRejectClick?: (call: CallRequest) => void;
 }
 
-/** Renders preferred times (UTC) converted to user's timezone. */
-function formatPreferredTimes(
-  times: string[] | undefined,
-  userTimeZone?: string,
-): string {
+/** Renders preferred times as returned by the API (no timezone conversion). */
+function formatPreferredTimes(times: string[] | undefined): string {
   if (!times?.length) return "--";
   const formatted = times
-    .map((t) => formatUtcToLocal(t, "short", true, userTimeZone))
+    .map((time) => formatCallRequestBackendDateTimeShort(time))
     .filter((s) => s !== "--");
   return formatted.length > 0 ? formatted.join(", ") : "--";
 }
@@ -65,7 +62,6 @@ function formatPreferredTimes(
  */
 export default function CallRequestCard({
   call,
-  userTimeZone,
   onEditClick,
   onDeleteClick,
   onApproveClick,
@@ -159,7 +155,8 @@ export default function CallRequestCard({
                 />
               </Stack>
               <Typography variant="caption" color="text.secondary">
-                Requested on {formatUtcToLocal(call.createdOn, "short", true, userTimeZone)}
+                Requested on{" "}
+                {formatCallRequestBackendDateTimeShort(call.createdOn)}
               </Typography>
             </Box>
           </Stack>
@@ -249,7 +246,7 @@ export default function CallRequestCard({
               Preferred Times
             </Typography>
             <Typography variant="body2">
-              {formatPreferredTimes(call.preferredTimes, userTimeZone)}
+              {formatPreferredTimes(call.preferredTimes)}
             </Typography>
           </Box>
           <Box>
