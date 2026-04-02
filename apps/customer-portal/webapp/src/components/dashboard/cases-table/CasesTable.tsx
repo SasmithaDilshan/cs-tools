@@ -43,6 +43,14 @@ interface CasesTableProps {
   includeDeploymentFilter?: boolean;
 }
 
+interface CasesTableFilterValues {
+  [key: string]: string | number | undefined;
+  statusId?: string | number;
+  severityId?: string | number;
+  issueTypes?: string | number;
+  deploymentId?: string | number;
+}
+
 const CasesTable = ({
   projectId,
   excludeS0 = false,
@@ -51,7 +59,7 @@ const CasesTable = ({
 }: CasesTableProps): JSX.Element => {
   const navigate = useNavigate();
   const { isLoading: isAuthLoading } = useAsgardeo();
-  const [filters, setFilters] = useState<Record<string, string | number>>({});
+  const [filters, setFilters] = useState<CasesTableFilterValues>({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(5);
@@ -72,7 +80,7 @@ const CasesTable = ({
     [deploymentsQuery.data],
   );
 
-  const effectiveFilters = useMemo(
+  const effectiveFilters: CasesTableFilterValues = useMemo(
     () =>
       includeDeploymentFilter ? filters : { ...filters, deploymentId: undefined },
     [filters, includeDeploymentFilter],

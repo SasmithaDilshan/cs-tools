@@ -36,6 +36,7 @@ import AnnouncementsSearchBar from "@components/support/announcements/Announceme
 import AnnouncementList from "@components/support/announcements/AnnouncementList";
 import { hasListSearchOrFilters } from "@utils/support";
 import AllCasesListSkeleton from "@components/support/all-cases/AllCasesListSkeleton";
+import DOMPurify from "dompurify";
 
 /**
  * AnnouncementsPage component to display announcements with stats, search, and filters (filter dropdowns disabled).
@@ -126,9 +127,16 @@ export default function AnnouncementsPage(): JSX.Element {
           <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
             Announcements
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            View and manage announcements for your project
-          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            component="div"
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(
+                "View and manage announcements for your project",
+              ),
+            }}
+          />
         </Box>
       </Box>
 

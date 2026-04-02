@@ -64,6 +64,7 @@ export default function OperationsPage(): JSX.Element {
 
   const isServiceRequestEnabled = permissions.hasSR;
   const isChangeRequestEnabled = permissions.hasCR;
+  const operationsPath = `/projects/${projectId}/operations`;
 
   const {
     data: srData,
@@ -134,14 +135,12 @@ export default function OperationsPage(): JSX.Element {
       ? undefined
       : srReady && crReady
         ? {
-            ...(isServiceRequestEnabled &&
-              activeServiceRequests !== undefined && {
-                activeServiceRequests,
-              }),
-            ...(isChangeRequestEnabled &&
-              activeChangeRequests !== undefined && {
-                activeChangeRequests,
-              }),
+            ...(isServiceRequestEnabled && {
+              activeServiceRequests: activeServiceRequests ?? 0,
+            }),
+            ...(isChangeRequestEnabled && {
+              activeChangeRequests: activeChangeRequests ?? 0,
+            }),
             ...((isServiceRequestEnabled || isChangeRequestEnabled) && {
               completedThisMonth,
             }),
@@ -260,6 +259,7 @@ export default function OperationsPage(): JSX.Element {
                       onClick: () =>
                         navigate(
                           `/projects/${projectId}/operations/service-requests?createdByMe=true`,
+                          { state: { returnTo: operationsPath } },
                         ),
                     },
                     {
@@ -267,6 +267,7 @@ export default function OperationsPage(): JSX.Element {
                       onClick: () =>
                         navigate(
                           `/projects/${projectId}/operations/service-requests`,
+                          { state: { returnTo: operationsPath } },
                         ),
                     },
                   ]}
@@ -280,6 +281,7 @@ export default function OperationsPage(): JSX.Element {
                         ? (c) =>
                             navigate(
                               `/projects/${projectId}/operations/service-requests/${c.id}`,
+                              { state: { returnTo: operationsPath } },
                             )
                         : undefined
                     }
@@ -300,6 +302,7 @@ export default function OperationsPage(): JSX.Element {
                       onClick: () =>
                         navigate(
                           `/projects/${projectId}/operations/change-requests`,
+                          { state: { returnTo: operationsPath } },
                         ),
                     },
                   ]}
@@ -313,6 +316,7 @@ export default function OperationsPage(): JSX.Element {
                         ? (cr) =>
                             navigate(
                               `/projects/${projectId}/operations/change-requests/${cr.id}`,
+                              { state: { returnTo: operationsPath } },
                             )
                         : undefined
                     }

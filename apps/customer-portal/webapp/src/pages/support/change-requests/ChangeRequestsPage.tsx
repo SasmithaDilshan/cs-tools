@@ -53,6 +53,7 @@ import ChangeRequestsCalendarView from "@components/support/change-requests/Chan
 import TabBar from "@components/common/tab-bar/TabBar";
 import { generateChangeRequestsSchedulePdf } from "@utils/changeRequestsSchedulePdf";
 import { hasListSearchOrFilters } from "@utils/support";
+import DOMPurify from "dompurify";
 
 /**
  * ChangeRequestsPage component to display all change requests with stats, filters, and search.
@@ -62,6 +63,7 @@ import { hasListSearchOrFilters } from "@utils/support";
 export default function ChangeRequestsPage(): JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
+  const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
   const { projectId } = useParams<{ projectId: string }>();
   const basePath = location.pathname.includes("/operations/")
     ? "operations"
@@ -255,7 +257,7 @@ export default function ChangeRequestsPage(): JSX.Element {
       <Box>
         <Button
           startIcon={<ArrowLeft size={16} />}
-          onClick={() => navigate("..")}
+          onClick={() => (returnTo ? navigate(returnTo) : navigate(".."))}
           sx={{ mb: 2 }}
           variant="text"
         >
@@ -272,9 +274,17 @@ export default function ChangeRequestsPage(): JSX.Element {
             <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
               All Change Requests
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Track and manage deployment changes and updates
-            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              component="div"
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted static copy rendered as HTML by request
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(
+                  "Track and manage deployment changes and updates",
+                ),
+              }}
+            />
           </Box>
           <Button
             variant="contained"

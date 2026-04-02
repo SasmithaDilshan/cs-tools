@@ -15,6 +15,7 @@
 // under the License.
 
 import {
+  type InfiniteData,
   useInfiniteQuery,
   useQuery,
   type UseInfiniteQueryResult,
@@ -148,12 +149,12 @@ export interface UsePostDeploymentProductsSearchInfiniteOptions {
  *
  * @param {string} deploymentId - Deployment ID.
  * @param {UsePostDeploymentProductsSearchInfiniteOptions} [options] - request/pageSize/enabled.
- * @returns {UseInfiniteQueryResult<DeployedProductsResponsePayload, Error>} Infinite query result.
+ * @returns {UseInfiniteQueryResult<InfiniteData<DeployedProductsResponsePayload>, Error>} Infinite query result.
  */
 export function usePostDeploymentProductsSearchInfinite(
   deploymentId: string,
   options?: UsePostDeploymentProductsSearchInfiniteOptions,
-): UseInfiniteQueryResult<DeployedProductsResponsePayload, Error> {
+): UseInfiniteQueryResult<InfiniteData<DeployedProductsResponsePayload>, Error> {
   const logger = useLogger();
   const { isSignedIn, isLoading: isAuthLoading } = useAsgardeo();
   const authFetch = useAuthApiClient();

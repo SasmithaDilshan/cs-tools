@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useParams, useNavigate, useSearchParams } from "react-router";
+import { useParams, useNavigate, useSearchParams, useLocation } from "react-router";
 import {
   useState,
   useMemo,
@@ -55,6 +55,8 @@ import { hasListSearchOrFilters } from "@utils/support";
  */
 export default function AllConversationsPage(): JSX.Element {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
   const { projectId } = useParams<{ projectId: string }>();
   const [searchParams] = useSearchParams();
   const createdByMe = searchParams.get("createdByMe") === "true";
@@ -190,7 +192,7 @@ export default function AllConversationsPage(): JSX.Element {
       <Box>
         <Button
           startIcon={<ArrowLeft size={16} />}
-          onClick={() => navigate("..")}
+          onClick={() => (returnTo ? navigate(returnTo) : navigate(".."))}
           sx={{ mb: 2 }}
           variant="text"
         >

@@ -179,7 +179,7 @@ const FilterPopover = <T extends Record<string, unknown>>({
                   <Select<string>
                     labelId={`${field.id}-label`}
                     id={field.id}
-                    value={tempFilters[field.id] || ""}
+                    value={(tempFilters[field.id] as string) || ""}
                     label={field.label}
                     onChange={handleSelectChange(field.id)}
                     MenuProps={{

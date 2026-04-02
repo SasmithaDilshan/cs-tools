@@ -32,7 +32,7 @@ import type { FilterField } from "@components/common/filter-panel/FilterPopover"
 type SelectFilterField = FilterField & { type: "select" };
 
 export interface CasesFiltersProps {
-  filters: Record<string, string | number>;
+  filters: Record<string, string | number | undefined>;
   filterFields: SelectFilterField[];
   onFilterChange: (field: string, value: string | number) => void;
 }

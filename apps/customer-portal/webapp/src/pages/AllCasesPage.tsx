@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useParams, useNavigate, useSearchParams } from "react-router";
+import { useParams, useNavigate, useSearchParams, useLocation } from "react-router";
 import {
   useState,
   useMemo,
@@ -42,6 +42,7 @@ import useGetProjectCases from "@api/useGetProjectCases";
 import { usePostProjectDeploymentsSearchInfinite } from "@api/usePostProjectDeploymentsSearch";
 import { hasListSearchOrFilters, isS0Case } from "@utils/support";
 import { CaseType } from "@constants/supportConstants";
+import DOMPurify from "dompurify";
 import {
   getProjectPermissions,
   shouldExcludeS0,
@@ -58,6 +59,8 @@ import AllCasesList from "@components/support/all-cases/AllCasesList";
  */
 export default function AllCasesPage(): JSX.Element {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
   const { projectId } = useParams<{ projectId: string }>();
   const [searchParams] = useSearchParams();
   const createdByMe = searchParams.get("createdByMe") === "true";
@@ -247,7 +250,7 @@ export default function AllCasesPage(): JSX.Element {
       <Box>
         <Button
           startIcon={<ArrowLeft size={16} />}
-          onClick={() => navigate("..")}
+            onClick={() => (returnTo ? navigate(returnTo) : navigate(".."))}
           sx={{ mb: 2 }}
           variant="text"
         >
@@ -257,11 +260,19 @@ export default function AllCasesPage(): JSX.Element {
           <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
             {createdByMe ? "My Cases" : "All Cases"}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {createdByMe
-              ? "Manage and track your support cases"
-              : "Manage and track all your support cases"}
-          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            component="div"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted static copy rendered as HTML by request
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(
+                createdByMe
+                  ? "Manage and track your support cases"
+                  : "Manage and track all your support cases",
+              ),
+            }}
+          />
         </Box>
       </Box>
 

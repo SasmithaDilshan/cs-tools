@@ -70,6 +70,7 @@ import {
   stripHtml,
   countListSearchAndFilters,
 } from "@utils/support";
+import DOMPurify from "dompurify";
 
 /**
  * SecurityReportAnalysis displays security vulnerability reports uploaded for analysis.
@@ -232,9 +233,16 @@ const SecurityReportAnalysis = (): JSX.Element => {
             <Typography variant="h5" color="text.primary" sx={{ mb: 0.5 }}>
               Security Report Analysis
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Security vulnerability reports uploaded for analysis
-            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              component="div"
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(
+                  "Security vulnerability reports uploaded for analysis",
+                ),
+              }}
+            />
           </Box>
 
           {/* Action Buttons */}

@@ -122,6 +122,11 @@ export default function ConversationDetailsPage(): JSX.Element {
   }
 
   const handleBack = () => {
+    const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
+    if (returnTo) {
+      navigate(returnTo);
+      return;
+    }
     if (window.history.length > 1) {
       navigate(ROUTE_PREVIOUS_PAGE);
     } else if (projectId) {

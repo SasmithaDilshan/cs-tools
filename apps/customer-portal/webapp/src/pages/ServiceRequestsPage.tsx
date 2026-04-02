@@ -39,7 +39,8 @@ import { useGetProjectCasesStats } from "@api/useGetProjectCasesStats";
 import useGetProjectDetails from "@api/useGetProjectDetails";
 import useGetProjectFilters from "@api/useGetProjectFilters";
 import useGetProjectCases from "@api/useGetProjectCases";
-import { useGetDeployments } from "@api/useGetDeployments";
+import { usePostProjectDeploymentsSearchInfinite } from "@api/usePostProjectDeploymentsSearch";
+import DOMPurify from "dompurify";
 import { hasListSearchOrFilters, isS0Case } from "@utils/support";
 import { CaseType } from "@constants/supportConstants";
 import {
@@ -67,6 +68,7 @@ export default function ServiceRequestsPage(): JSX.Element {
   const basePath = location.pathname.includes("/operations/")
     ? "operations"
     : "support";
+  const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
@@ -98,7 +100,12 @@ export default function ServiceRequestsPage(): JSX.Element {
   }, [projectDetailsReady, project]);
 
   const { data: filterMetadata } = useGetProjectFilters(projectId || "");
-  const { data: deploymentsData } = useGetDeployments(projectId || "");
+  const deploymentsQuery = usePostProjectDeploymentsSearchInfinite(projectId || "", {
+    pageSize: 10,
+    enabled: !!projectId,
+  });
+  const deploymentsList =
+    deploymentsQuery.data?.pages.flatMap((p) => p.deployments ?? []) ?? [];
 
   const {
     data: stats,
@@ -255,7 +262,7 @@ export default function ServiceRequestsPage(): JSX.Element {
         <Box>
           <Button
             startIcon={<ArrowLeft size={16} />}
-            onClick={() => navigate("..")}
+            onClick={() => (returnTo ? navigate(returnTo) : navigate(".."))}
             sx={{ mb: 2 }}
             variant="text"
           >
@@ -288,11 +295,19 @@ export default function ServiceRequestsPage(): JSX.Element {
           <Typography variant="h4" color="text.primary" sx={{ mb: 1 }}>
             {createdByMe ? "My Service Requests" : "All Service Requests"}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {createdByMe
-              ? "Manage and track your service requests"
-              : "Manage deployments, operations, infrastructure change, and service configurations"}
-          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            component="div"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted static copy rendered as HTML by request
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(
+                createdByMe
+                  ? "Manage and track your service requests"
+                  : "Manage deployments, operations, infrastructure change, and service configurations",
+              ),
+            }}
+          />
         </Box>
         <Button
           variant="contained"
@@ -321,9 +336,19 @@ export default function ServiceRequestsPage(): JSX.Element {
         filterMetadata={filterMetadata}
         deployments={
           projectDetailsReady && permissions.hasDeployments
-            ? (deploymentsData?.deployments ?? [])
+            ? deploymentsList
             : []
         }
+        onLoadMoreDeployments={() => {
+          if (
+            deploymentsQuery.hasNextPage &&
+            !deploymentsQuery.isFetchingNextPage
+          ) {
+            void deploymentsQuery.fetchNextPage();
+          }
+        }}
+        hasMoreDeployments={!!deploymentsQuery.hasNextPage}
+        isFetchingMoreDeployments={deploymentsQuery.isFetchingNextPage}
         onFilterChange={handleFilterChange}
         onClearFilters={handleClearFilters}
         excludeS0={excludeS0}

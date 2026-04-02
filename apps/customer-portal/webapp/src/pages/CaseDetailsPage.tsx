@@ -80,6 +80,11 @@ export default function CaseDetailsPage(): JSX.Element {
   }, [isError, showError]);
 
   const handleBack = () => {
+    const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
+    if (returnTo) {
+      navigate(returnTo);
+      return;
+    }
     if (isEngagementRoute) {
       navigate(`/projects/${projectId}/engagements`);
       return;
