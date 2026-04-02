@@ -31,6 +31,7 @@ import { type JSX } from "react";
 import type { CallRequest } from "@models/responses";
 import {
   formatCallRequestBackendDateTimeShort,
+  formatUtcToLocal,
   getCallRequestStatusColor,
   resolveColorFromTheme,
 } from "@utils/support";
@@ -45,11 +46,14 @@ export interface CallRequestCardProps {
   onRejectClick?: (call: CallRequest) => void;
 }
 
-/** Renders preferred times as returned by the API (no timezone conversion). */
-function formatPreferredTimes(times: string[] | undefined): string {
+/** Renders preferred times in the selected scheduling timezone for UI display. */
+function formatPreferredTimes(
+  times: string[] | undefined,
+  userTimeZone?: string,
+): string {
   if (!times?.length) return "--";
   const formatted = times
-    .map((time) => formatCallRequestBackendDateTimeShort(time))
+    .map((time) => formatUtcToLocal(time, "short", false, userTimeZone))
     .filter((s) => s !== "--");
   return formatted.length > 0 ? formatted.join(", ") : "--";
 }
@@ -62,6 +66,7 @@ function formatPreferredTimes(times: string[] | undefined): string {
  */
 export default function CallRequestCard({
   call,
+  userTimeZone,
   onEditClick,
   onDeleteClick,
   onApproveClick,
@@ -246,7 +251,7 @@ export default function CallRequestCard({
               Preferred Times
             </Typography>
             <Typography variant="body2">
-              {formatPreferredTimes(call.preferredTimes)}
+              {formatPreferredTimes(call.preferredTimes, userTimeZone)}
             </Typography>
           </Box>
           <Box>
