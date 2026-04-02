@@ -62,7 +62,7 @@ describe("CaseDetailsActionRow", () => {
     );
     expect(screen.getByText("Jane Doe")).toBeInTheDocument();
     expect(screen.getByText("Support Engineer")).toBeInTheDocument();
-    expect(screen.getByText("Manage case status")).toBeInTheDocument();
+    expect(screen.getByText("Manage State")).toBeInTheDocument();
     expect(screen.queryByText("Escalate Case")).not.toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
   });
@@ -78,11 +78,11 @@ describe("CaseDetailsActionRow", () => {
       </ThemeProvider>,
     );
     expect(screen.queryByText("Support Engineer")).not.toBeInTheDocument();
-    expect(screen.getByText("Manage case status")).toBeInTheDocument();
+    expect(screen.getByText("Manage State")).toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
   });
 
-  it("should show skeletons for avatar and engineer but keep play icon, Manage case status when isLoading with engineer", () => {
+  it("should show skeletons for avatar and engineer but keep play icon, Manage State when isLoading with engineer", () => {
     const { container } = render(
       <ThemeProvider theme={createTheme()}>
         <CaseDetailsActionRow
@@ -94,7 +94,7 @@ describe("CaseDetailsActionRow", () => {
       </ThemeProvider>,
     );
     expect(screen.getByText("Support Engineer")).toBeInTheDocument();
-    expect(screen.getByText("Manage case status")).toBeInTheDocument();
+    expect(screen.getByText("Manage State")).toBeInTheDocument();
     expect(screen.queryByText("Escalate Case")).not.toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
     const skeletons = container.querySelectorAll(".MuiSkeleton-root");
