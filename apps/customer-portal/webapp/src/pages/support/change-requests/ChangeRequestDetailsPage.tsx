@@ -16,6 +16,7 @@
 
 import { useParams, useNavigate, useLocation } from "react-router";
 import { type JSX, useMemo, useState } from "react";
+import DOMPurify from "dompurify";
 import {
   Box,
   Button,
@@ -66,14 +67,6 @@ import {
 } from "@constants/changeRequestConstants";
 
 /**
- * Strip HTML tags from a string
- */
-function stripHtmlTags(html: string | null | undefined): string {
-  if (!html) return "";
-  return html.replace(/<[^>]*>/g, "").trim();
-}
-
-/**
  * ChangeRequestDetailsPage component to display detailed information about a change request.
  *
  * @returns {JSX.Element} The rendered Change Request Details page.
@@ -88,6 +81,7 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
   const basePath = location.pathname.includes("/operations/")
     ? "operations"
     : "support";
+  const returnTo = (location.state as { returnTo?: string } | null)?.returnTo;
 
   const { showError } = useErrorBanner();
   const { showSuccess } = useSuccessBanner();
@@ -160,7 +154,9 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
         <Button
           startIcon={<ArrowLeft size={16} />}
           onClick={() =>
-            navigate(`/projects/${projectId}/${basePath}/change-requests`)
+            returnTo
+              ? navigate(returnTo)
+              : navigate(`/projects/${projectId}/${basePath}/change-requests`)
           }
           sx={{ alignSelf: "flex-start" }}
           variant="text"
@@ -190,13 +186,31 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
     return <IconComponent size={12} />;
   };
 
-  // Compute stripped values for proper fallback rendering
-  const descriptionText = stripHtmlTags(changeRequest.description);
-  const impactText = stripHtmlTags(changeRequest.impactDescription);
-  const serviceOutageText = stripHtmlTags(changeRequest.serviceOutage);
-  const communicationPlanText = stripHtmlTags(changeRequest.communicationPlan);
-  const rollbackPlanText = stripHtmlTags(changeRequest.rollbackPlan);
-  const testPlanText = stripHtmlTags(changeRequest.testPlan);
+  const renderHtmlContent = (
+    html: string | null | undefined,
+    fallback: string,
+  ): JSX.Element => {
+    if (!html || html.trim() === "") {
+      return (
+        <Typography variant="body2" color="text.secondary">
+          {fallback}
+        </Typography>
+      );
+    }
+    return (
+      <Box
+        component="div"
+        sx={{
+          typography: "body2",
+          color: "text.secondary",
+          "& p": { mb: 0.5 },
+          "& p:last-child": { mb: 0 },
+        }}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized backend HTML content
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}
+      />
+    );
+  };
 
   return (
     <Box
@@ -221,7 +235,9 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
         <Button
           startIcon={<ArrowLeft size={16} />}
           onClick={() =>
-            navigate(`/projects/${projectId}/${basePath}/change-requests`)
+            returnTo
+              ? navigate(returnTo)
+              : navigate(`/projects/${projectId}/${basePath}/change-requests`)
           }
           sx={{ alignSelf: "flex-start" }}
           variant="text"
@@ -549,17 +565,10 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
             <Box sx={{ px: 3, py: 3 }}>
               <Stack spacing={3}>
                 <Box>
-                  <Typography
-                    variant="body2"
-                    color="text.primary"
-                    fontWeight={500}
-                    sx={{ mb: 1 }}
-                  >
-                    Change Description
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {descriptionText || "No description available"}
-                  </Typography>
+                  {renderHtmlContent(
+                    changeRequest.description,
+                    "No description available",
+                  )}
                 </Box>
               </Stack>
             </Box>
@@ -577,56 +586,28 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
             <Box sx={{ px: 3, py: 3 }}>
               <Stack spacing={3}>
                 <Box>
-                  <Typography
-                    variant="body2"
-                    color="text.primary"
-                    fontWeight={500}
-                    sx={{ mb: 1 }}
-                  >
-                    Impact Description
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {impactText || "No impact description available"}
-                  </Typography>
+                  {renderHtmlContent(
+                    changeRequest.impactDescription,
+                    "No impact description available",
+                  )}
                 </Box>
-
-                {changeRequest.hasServiceOutage && (
-                  <>
-                    <Divider />
-
-                    <Box>
-                      <Typography
-                        variant="body2"
-                        color="text.primary"
-                        fontWeight={500}
-                        sx={{ mb: 2 }}
-                      >
-                        Service Outage Details
-                      </Typography>
-                      <Paper
-                        sx={{
-                          bgcolor: alpha(colors.red[500], 0.05),
-                          border: 1,
-                          borderColor: alpha(colors.red[500], 0.2),
-                          p: 2,
-                        }}
-                      >
-                        <Box sx={{ display: "flex", gap: 1.5 }}>
-                          <TriangleAlert
-                            size={20}
-                            color={colors.red[600]}
-                            style={{ marginTop: 2 }}
-                          />
-                          <Typography variant="body2" color="text.primary">
-                            {serviceOutageText ||
-                              "Service outage details not available"}
-                          </Typography>
-                        </Box>
-                      </Paper>
-                    </Box>
-                  </>
-                )}
               </Stack>
+            </Box>
+          </Paper>
+
+          <Paper variant="outlined">
+            <Box sx={{ px: 3, pt: 3 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <TriangleAlert size={20} color={colors.grey[600]} />
+                <Typography variant="h6">Service Outage Details</Typography>
+              </Box>
+            </Box>
+
+            <Box sx={{ px: 3, py: 3 }}>
+              {renderHtmlContent(
+                changeRequest.serviceOutage,
+                "No service outage details available.",
+              )}
             </Box>
           </Paper>
 
@@ -640,9 +621,10 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
             </Box>
 
             <Box sx={{ px: 3, py: 3 }}>
-              <Typography variant="body2" color="text.secondary">
-                {communicationPlanText || "No communication plan available"}
-              </Typography>
+              {renderHtmlContent(
+                changeRequest.communicationPlan,
+                "No communication plan available",
+              )}
             </Box>
           </Paper>
 
@@ -656,9 +638,10 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
             </Box>
 
             <Box sx={{ px: 3, py: 3 }}>
-              <Typography variant="body2" color="text.secondary">
-                {rollbackPlanText || "No rollback plan available"}
-              </Typography>
+              {renderHtmlContent(
+                changeRequest.rollbackPlan,
+                "No rollback plan available",
+              )}
             </Box>
           </Paper>
 
@@ -672,9 +655,10 @@ export default function ChangeRequestDetailsPage(): JSX.Element {
             </Box>
 
             <Box sx={{ px: 3, py: 3 }}>
-              <Typography variant="body2" color="text.secondary">
-                {testPlanText || "No test plan available"}
-              </Typography>
+              {renderHtmlContent(
+                changeRequest.testPlan,
+                "No test plan available",
+              )}
             </Box>
           </Paper>
 
