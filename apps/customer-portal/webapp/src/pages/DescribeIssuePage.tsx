@@ -121,6 +121,8 @@ export default function DescribeIssuePage(): JSX.Element {
         width: "100%",
         minHeight: 0,
         mt: -1.5,
+        overflow: "hidden",
+        maxHeight: "100%",
       }}
     >
       <Button
@@ -139,7 +141,13 @@ export default function DescribeIssuePage(): JSX.Element {
 
       <Card
         variant="outlined"
-        sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
       >
         <CardContent
           sx={{
@@ -148,72 +156,84 @@ export default function DescribeIssuePage(): JSX.Element {
             minHeight: 0,
             display: "flex",
             flexDirection: "column",
+            overflow: "hidden",
           }}
         >
-          <Stack spacing={3} sx={{ flex: 1, minHeight: 0 }}>
-            <Box>
-              <Typography variant="h5" sx={{ mb: 1 }} component="h1">
-                What can we help you with?
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Describe your issue or question in as much detail as you&apos;d
-                like. We&apos;ll analyze it and guide you to a solution.
-              </Typography>
-            </Box>
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
+              overflowX: "hidden",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
+            <Stack spacing={3} sx={{ pb: 0.5 }}>
+              <Box>
+                <Typography variant="h5" sx={{ mb: 1 }} component="h1">
+                  What can we help you with?
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Describe your issue or question in as much detail as you&apos;d
+                  like. We&apos;ll analyze it and guide you to a solution.
+                </Typography>
+              </Box>
 
-            <Box>
-              <Typography
-                variant="body2"
-                fontWeight={500}
-                color="text.primary"
-                component="label"
-                htmlFor="describe-issue-editor"
-                sx={{ display: "block", mb: 1, flexShrink: 0 }}
-              >
-                Describe your issue
-              </Typography>
-              <Editor
-                id="describe-issue-editor"
-                value={value}
-                onChange={setValue}
-                placeholder={ISSUE_PLACEHOLDER}
-                minHeight={270}
-                showToolbar
-                toolbarVariant="describeIssue"
-                onSubmitKeyDown={handleSubmit}
-                disabled={isSubmitting}
-              />
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", mt: 1, flexShrink: 0 }}
-              >
-                Tip: Include details like error messages, when the issue
-                started, affected systems, and what you&apos;ve already tried.
-              </Typography>
-            </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  variant="body2"
+                  fontWeight={500}
+                  color="text.primary"
+                  component="label"
+                  htmlFor="describe-issue-editor"
+                  sx={{ display: "block", mb: 1 }}
+                >
+                  Describe your issue
+                </Typography>
+                <Editor
+                  id="describe-issue-editor"
+                  value={value}
+                  onChange={setValue}
+                  placeholder={ISSUE_PLACEHOLDER}
+                  minHeight={270}
+                  maxHeight="none"
+                  showToolbar
+                  toolbarVariant="describeIssue"
+                  onSubmitKeyDown={handleSubmit}
+                  disabled={isSubmitting}
+                  showKeyboardHint
+                />
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mt: 1 }}
+                >
+                  Tip: Include details like error messages, when the issue
+                  started, affected systems, and what you&apos;ve already tried.
+                </Typography>
+              </Box>
 
-            <Box
-              sx={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 2,
-                flexShrink: 0,
-              }}
-            >
-              <Button
-                variant="contained"
-                color="warning"
-                startIcon={<Send size={18} />}
-                onClick={handleSubmit}
-                loading={isLoadingAfterClick}
-                loadingPosition="start"
-                disabled={isSubmitDisabled}
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 2,
+                }}
               >
-                Submit & Get Help
-              </Button>
-            </Box>
-          </Stack>
+                <Button
+                  variant="contained"
+                  color="warning"
+                  startIcon={<Send size={18} />}
+                  onClick={handleSubmit}
+                  loading={isLoadingAfterClick}
+                  loadingPosition="start"
+                  disabled={isSubmitDisabled}
+                >
+                  Submit & Get Help
+                </Button>
+              </Box>
+            </Stack>
+          </Box>
         </CardContent>
       </Card>
     </Box>
