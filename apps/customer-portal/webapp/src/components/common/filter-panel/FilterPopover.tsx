@@ -183,7 +183,7 @@ const FilterPopover = <T extends Record<string, unknown>>({
                     label={field.label}
                     onChange={handleSelectChange(field.id)}
                     MenuProps={{
-                      PaperProps: {
+                      MenuListProps: {
                         onScroll: (e: UIEvent<HTMLElement>) => {
                           if (
                             !field.onLoadMore ||

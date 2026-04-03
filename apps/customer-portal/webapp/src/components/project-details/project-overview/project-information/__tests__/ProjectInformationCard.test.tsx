@@ -36,11 +36,6 @@ vi.mock("../ProjectName", () => ({
     </div>
   ),
 }));
-vi.mock("../ProjectDescription", () => ({
-  default: ({ description }: any) => (
-    <div data-testid="project-description">{description}</div>
-  ),
-}));
 vi.mock("../ProjectMetadata", () => ({
   default: ({ slaStatus }: any) => (
     <div data-testid="project-metadata">SLA: {slaStatus}</div>
@@ -54,9 +49,8 @@ vi.mock("../SubscriptionDetails", () => ({
   ),
 }));
 
-// Mock utils
-vi.mock("@/utils/projectStats", () => ({
-  formatProjectDate: vi.fn((date) => `Formatted ${date}`),
+vi.mock("@utils/projectDetails", () => ({
+  formatProjectDate: (date: string) => `Formatted ${date}`,
 }));
 
 describe("ProjectInformationCard", () => {
@@ -65,6 +59,8 @@ describe("ProjectInformationCard", () => {
     name: "Test Project",
     description: "Test Desc",
     createdOn: "2023-01-01",
+    startDate: "2023-01-01",
+    endDate: "2024-01-01",
     type: "Subscription",
     account: {
       id: "acc-1",
@@ -91,10 +87,6 @@ describe("ProjectInformationCard", () => {
       "Test Project - TEST-KEY",
     );
 
-    expect(screen.getByTestId("project-description")).toHaveTextContent(
-      "Test Desc",
-    );
-
     expect(screen.getByTestId("project-metadata")).toHaveTextContent(
       "SLA: Met",
     );
@@ -115,7 +107,6 @@ describe("ProjectInformationCard", () => {
     );
 
     expect(screen.getByTestId("project-name")).toHaveTextContent("-- - --");
-    expect(screen.getByTestId("project-description")).toHaveTextContent("--");
     // Ensure it doesn't crash
     expect(screen.getByTestId("project-metadata")).toBeInTheDocument();
   });

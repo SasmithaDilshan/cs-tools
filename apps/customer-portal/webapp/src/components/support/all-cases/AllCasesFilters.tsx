@@ -109,7 +109,7 @@ export default function AllCasesFilters({
                 MenuProps={
                   isDeploymentFilter
                     ? {
-                        PaperProps: {
+                        MenuListProps: {
                           onScroll: (e: UIEvent<HTMLElement>) => {
                             if (
                               !onLoadMoreDeployments ||

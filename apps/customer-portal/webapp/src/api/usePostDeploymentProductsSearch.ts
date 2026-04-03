@@ -25,6 +25,7 @@ import { useAsgardeo } from "@asgardeo/react";
 import { useAuthApiClient } from "@api/useAuthApiClient";
 import { useLogger } from "@hooks/useLogger";
 import { ApiQueryKeys } from "@constants/apiConstants";
+import { addApiHeaders } from "@utils/apiUtils";
 import type { DeployedProductSearchRequest } from "@models/requests";
 import type {
   DeploymentProductItem,
@@ -36,6 +37,65 @@ import { isDeployedProductsResponse } from "@models/responses";
 const DEFAULT_PAGE_SIZE = 10;
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
+
+function mergeAuthHeadersIntoFetchInit(
+  idToken: string,
+  initHeaders?: HeadersInit,
+): Headers {
+  const merged = new Headers(initHeaders ?? undefined);
+  for (const [key, value] of Object.entries(addApiHeaders(idToken))) {
+    merged.set(key, value);
+  }
+  return merged;
+}
+
+/**
+ * Returns a fetch-compatible function that applies Bearer + x-user-id-token while
+ * preserving caller headers (e.g. Content-Type for JSON POST body binding).
+ * Use when `useAuthApiClient` cannot be used (e.g. token from `getIdToken()` inside useQueries).
+ *
+ * @param {string} idToken - Asgardeo ID token.
+ * @returns {FetchFn} Wrapped global fetch.
+ */
+export function createFetchWithMergedAuthHeaders(idToken: string): FetchFn {
+  return (url, init) =>
+    fetch(url, {
+      ...init,
+      headers: mergeAuthHeadersIntoFetchInit(idToken, init?.headers),
+    });
+}
+
+/**
+ * Builds a JSON body that matches backend DeployedProductSearchPayload only
+ * (pagination + optional filters.consumption). Avoids spreading unknown keys.
+ */
+function buildDeployedProductSearchPayload(
+  request: DeployedProductSearchRequest | undefined,
+  offset: number,
+  limit: number,
+): DeployedProductSearchRequest {
+  const payload: DeployedProductSearchRequest = {
+    pagination: { offset, limit },
+  };
+  const consumption = request?.filters?.consumption;
+  if (
+    consumption &&
+    (consumption.include !== undefined ||
+      (consumption.startDate != null && consumption.startDate !== "") ||
+      (consumption.endDate != null && consumption.endDate !== ""))
+  ) {
+    payload.filters = {
+      consumption: {
+        ...(consumption.include !== undefined
+          ? { include: consumption.include }
+          : {}),
+        ...(consumption.startDate ? { startDate: consumption.startDate } : {}),
+        ...(consumption.endDate ? { endDate: consumption.endDate } : {}),
+      },
+    };
+  }
+  return payload;
+}
 
 async function postDeploymentProductsSearchPage(params: {
   deploymentId: string;
@@ -53,14 +113,7 @@ async function postDeploymentProductsSearchPage(params: {
   }
 
   const requestUrl = `${baseUrl}/deployments/${deploymentId}/products/search`;
-  const payload: DeployedProductSearchRequest = {
-    ...(request ?? {}),
-    pagination: {
-      offset,
-      limit,
-      ...(request?.pagination ?? {}),
-    },
-  };
+  const payload = buildDeployedProductSearchPayload(request, offset, limit);
 
   const response = await fetchFn(requestUrl, {
     method: "POST",
@@ -112,9 +165,8 @@ export async function fetchDeploymentProductsAll(params: {
 
   const results: DeploymentProductItem[] = [];
   let offset = 0;
-  let total = Number.POSITIVE_INFINITY;
 
-  while (offset < total) {
+  while (true) {
     const payload = await postDeploymentProductsSearchPage({
       deploymentId,
       request,
@@ -124,14 +176,29 @@ export async function fetchDeploymentProductsAll(params: {
       logger,
     });
     const page = normalizeProductsPayload(payload);
-    results.push(...(page.deployedProducts ?? []));
+    const batch = page.deployedProducts ?? [];
+    results.push(...batch);
 
-    total = page.totalRecords ?? results.length;
-    offset = (page.offset ?? offset) + (page.limit ?? pageSize);
-
-    if ((page.deployedProducts ?? []).length === 0) {
+    if (batch.length === 0) {
       break;
     }
+
+    const limit = page.limit ?? pageSize;
+    const nextOffset = (page.offset ?? offset) + limit;
+    const total = page.totalRecords;
+
+    if (typeof total === "number" && !Number.isNaN(total)) {
+      if (nextOffset >= total) {
+        break;
+      }
+      offset = nextOffset;
+      continue;
+    }
+
+    if (batch.length < limit) {
+      break;
+    }
+    offset = nextOffset;
   }
 
   return results;
@@ -184,11 +251,18 @@ export function usePostDeploymentProductsSearchInfinite(
       }),
     getNextPageParam: (lastPayload) => {
       const lastPage = normalizeProductsPayload(lastPayload);
-      const total = lastPage.totalRecords ?? 0;
       const offset = lastPage.offset ?? 0;
       const limit = lastPage.limit ?? pageSize;
       const nextOffset = offset + limit;
-      return nextOffset < total ? nextOffset : undefined;
+      const items = lastPage.deployedProducts ?? [];
+      const total = lastPage.totalRecords;
+      if (typeof total === "number" && !Number.isNaN(total)) {
+        return nextOffset < total ? nextOffset : undefined;
+      }
+      if (items.length === limit) {
+        return nextOffset;
+      }
+      return undefined;
     },
     enabled: enabled && !!deploymentId && isSignedIn && !isAuthLoading,
     staleTime: 5 * 60 * 1000,

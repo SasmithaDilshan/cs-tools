@@ -115,11 +115,18 @@ export function usePostProjectDeploymentsSearchInfinite(
         logger,
       }),
     getNextPageParam: (lastPage) => {
-      const total = lastPage.totalRecords ?? 0;
       const offset = lastPage.offset ?? 0;
       const limit = lastPage.limit ?? pageSize;
       const nextOffset = offset + limit;
-      return nextOffset < total ? nextOffset : undefined;
+      const items = lastPage.deployments ?? [];
+      const total = lastPage.totalRecords;
+      if (typeof total === "number" && !Number.isNaN(total)) {
+        return nextOffset < total ? nextOffset : undefined;
+      }
+      if (items.length === limit) {
+        return nextOffset;
+      }
+      return undefined;
     },
     enabled: enabled && !!projectId && isSignedIn && !isAuthLoading,
     staleTime: 5 * 60 * 1000,
@@ -158,9 +165,8 @@ export function usePostProjectDeploymentsSearchAll(
     queryFn: async () => {
       const results: ProjectDeploymentItem[] = [];
       let offset = 0;
-      let total = Number.POSITIVE_INFINITY;
 
-      while (offset < total) {
+      while (true) {
         const page = await postDeploymentsSearchPage({
           projectId,
           request,
@@ -172,14 +178,26 @@ export function usePostProjectDeploymentsSearchAll(
         const items = page.deployments ?? [];
         results.push(...items);
 
-        const pageTotal = page.totalRecords ?? results.length;
-        total = pageTotal;
-        const pageLimit = page.limit ?? pageSize;
-        offset = (page.offset ?? offset) + pageLimit;
-
         if (items.length === 0) {
           break;
         }
+
+        const pageLimit = page.limit ?? pageSize;
+        const nextOffset = (page.offset ?? offset) + pageLimit;
+        const total = page.totalRecords;
+
+        if (typeof total === "number" && !Number.isNaN(total)) {
+          if (nextOffset >= total) {
+            break;
+          }
+          offset = nextOffset;
+          continue;
+        }
+
+        if (items.length < pageLimit) {
+          break;
+        }
+        offset = nextOffset;
       }
 
       return results;

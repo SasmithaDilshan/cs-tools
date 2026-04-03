@@ -48,6 +48,8 @@ import {
 import {
   getBaseDeploymentOptions,
   getBaseProductOptions,
+  getDeploymentProductDisplayLabel,
+  isUnknownPlaceholderProductLabel,
   resolveDeploymentMatch,
   resolveProductId,
 } from "@utils/caseCreation";
@@ -141,9 +143,12 @@ export default function CreateServiceRequestPage(): JSX.Element {
 
   const allDeploymentProducts = useMemo(
     () =>
-      (deploymentProductsData ?? []).filter((item) =>
-        item.product?.label?.trim(),
-      ),
+      (deploymentProductsData ?? []).filter((item) => {
+        const label = getDeploymentProductDisplayLabel(item);
+        return (
+          Boolean(label.trim()) && !isUnknownPlaceholderProductLabel(label)
+        );
+      }),
     [deploymentProductsData],
   );
   const baseProductOptions = getBaseProductOptions(allDeploymentProducts);

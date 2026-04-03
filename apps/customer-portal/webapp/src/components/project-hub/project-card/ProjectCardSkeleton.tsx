@@ -37,7 +37,7 @@ const ProjectCardSkeleton = (): JSX.Element => {
         display: "flex",
         flexDirection: "column",
         width: "100%",
-        minHeight: 320,
+        minHeight: 260,
       }}
     >
       {/* project card badges skeleton (project key + SLA status chips) */}
@@ -60,20 +60,6 @@ const ProjectCardSkeleton = (): JSX.Element => {
           <Box sx={{ height: "3.2rem", overflow: "hidden" }}>
             <Typography variant="h6" sx={{ mb: 1 }}>
               <Skeleton variant="text" width="80%" height={32} />
-            </Typography>
-          </Box>
-        }
-        subheader={
-          <Box sx={{ height: "6rem", overflow: "hidden" }}>
-            <Typography
-              variant="body2"
-              sx={{
-                display: "block",
-              }}
-            >
-              <Skeleton variant="text" width="100%" />
-              <Skeleton variant="text" width="90%" />
-              <Skeleton variant="text" width="40%" />
             </Typography>
           </Box>
         }

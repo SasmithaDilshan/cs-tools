@@ -54,6 +54,25 @@ export function normalizeProductLabel(label: string | undefined): string {
 }
 
 /**
+ * True when the combined product/version label is empty or only placeholder
+ * "Unknown" tokens from the API (e.g. "Unknown Unknown").
+ *
+ * @param {string} label - Combined display label.
+ * @returns {boolean} Whether the label should be treated as missing.
+ */
+export function isUnknownPlaceholderProductLabel(label: string): boolean {
+  const parts = label
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return true;
+  }
+  return parts.every((p) => p === "unknown");
+}
+
+/**
  * Builds the combined product label from case classification response.
  *
  * @param {Partial<Pick<CaseClassificationResponse["caseInfo"], "productName" | "productVersion">> | undefined} caseInfo - caseInfo (or subset) from classification response.
@@ -308,7 +327,10 @@ export function getBaseProductOptions(
   return allDeploymentProducts
     .map((item) => {
       const label = getDeploymentProductDisplayLabel(item);
-      return label ? { id: item.id, label } : null;
+      if (!label || isUnknownPlaceholderProductLabel(label)) {
+        return null;
+      }
+      return { id: item.id, label };
     })
     .filter((opt): opt is ProductVersionOption => opt !== null);
 }
@@ -355,7 +377,10 @@ export function buildEnvProducts(
       new Set(
         products
           .map((p) => getDeploymentProductDisplayLabel(p))
-          .filter((l): l is string => Boolean(l)),
+          .filter(
+            (l): l is string =>
+              Boolean(l) && !isUnknownPlaceholderProductLabel(l),
+          ),
       ),
     );
     const key = dep.name ?? dep.type?.label ?? "";

@@ -19,13 +19,10 @@ import { useQueries } from "@tanstack/react-query";
 import { useAsgardeo } from "@asgardeo/react";
 import { ApiQueryKeys } from "@constants/apiConstants";
 import {
+  createFetchWithMergedAuthHeaders,
   fetchDeploymentProductsAll,
-  type FetchFn,
 } from "@api/usePostDeploymentProductsSearch";
-import type {
-  DeploymentProductItem,
-} from "@models/responses";
-import { addApiHeaders } from "@utils/apiUtils";
+import type { DeploymentProductItem } from "@models/responses";
 
 interface DeploymentForProducts {
   id: string;
@@ -56,12 +53,13 @@ export function useAllDeploymentProducts(
       queryKey: [ApiQueryKeys.DEPLOYMENT_PRODUCTS, deploymentId, "search-all"],
       queryFn: async () => {
         const token = await getIdToken();
-        const fetchFn: FetchFn = (url, init) =>
-          fetch(url, { ...init, headers: addApiHeaders(token) });
+        if (!token) {
+          throw new Error("Unable to retrieve ID token");
+        }
         return fetchDeploymentProductsAll({
           deploymentId,
           pageSize: 10,
-          fetchFn,
+          fetchFn: createFetchWithMergedAuthHeaders(token),
         });
       },
       enabled: !!deploymentId,

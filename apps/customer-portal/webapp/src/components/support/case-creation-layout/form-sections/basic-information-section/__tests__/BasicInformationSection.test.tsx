@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ThemeProvider, createTheme } from "@wso2/oxygen-ui";
 import { BasicInformationSection } from "@components/support/case-creation-layout/form-sections/basic-information-section/BasicInformationSection";
@@ -60,32 +60,14 @@ describe("BasicInformationSection", () => {
     expect(screen.getByText("Product Version")).toBeInTheDocument();
   });
 
-  it("should render edit button with accessible label", () => {
-    renderSection();
-    expect(
-      screen.getByRole("button", { name: /edit basic information/i }),
-    ).toBeInTheDocument();
-  });
-
-  it("should toggle editing mode and enable/disable fields", () => {
+  it("should show no-products hint when product list is empty and deployment selected", () => {
     renderSection({
-      metadata: { deploymentTypes: ["Production"], products: [] },
+      productOptionList: [],
+      isProductDropdownDisabled: false,
+      isProductLoading: false,
     });
-
-    const editButton = screen.getByRole("button", {
-      name: /edit basic information/i,
-    });
-
-    // Toggle ON
-    fireEvent.click(editButton);
     expect(
-      screen.getByRole("button", { name: /stop editing basic information/i }),
-    ).toBeInTheDocument();
-
-    // Toggle OFF
-    fireEvent.click(editButton);
-    expect(
-      screen.getByRole("button", { name: /edit basic information/i }),
+      screen.getByText("No products available for this deployment"),
     ).toBeInTheDocument();
   });
 });

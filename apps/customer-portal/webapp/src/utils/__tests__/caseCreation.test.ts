@@ -24,6 +24,7 @@ import {
   findMatchingDeploymentLabel,
   shouldAddClassificationProductToOptions,
   getBaseProductOptions,
+  isUnknownPlaceholderProductLabel,
   getBaseDeploymentOptions,
 } from "@utils/caseCreation";
 import type { DeploymentProductItem } from "@models/responses";
@@ -339,6 +340,21 @@ describe("caseCreation utils", () => {
     });
   });
 
+  describe("isUnknownPlaceholderProductLabel", () => {
+    it("returns true for empty or unknown-only labels", () => {
+      expect(isUnknownPlaceholderProductLabel("")).toBe(true);
+      expect(isUnknownPlaceholderProductLabel("   ")).toBe(true);
+      expect(isUnknownPlaceholderProductLabel("Unknown")).toBe(true);
+      expect(isUnknownPlaceholderProductLabel("unknown UNKNOWN")).toBe(true);
+      expect(isUnknownPlaceholderProductLabel("Unknown Unknown")).toBe(true);
+    });
+
+    it("returns false for real product labels", () => {
+      expect(isUnknownPlaceholderProductLabel("WSO2 API Manager")).toBe(false);
+      expect(isUnknownPlaceholderProductLabel("Unknown Product")).toBe(false);
+    });
+  });
+
   describe("getBaseProductOptions", () => {
     it("returns one option per deployment product with id and combined product+version label", () => {
       const products: DeploymentProductItem[] = [
@@ -369,6 +385,32 @@ describe("caseCreation utils", () => {
 
     it("returns empty array for empty input", () => {
       expect(getBaseProductOptions([])).toEqual([]);
+    });
+
+    it("omits placeholder Unknown Unknown rows", () => {
+      const products: DeploymentProductItem[] = [
+        {
+          id: "1",
+          createdOn: "",
+          updatedOn: "",
+          description: null,
+          product: { id: "p1", label: "Unknown" },
+          deployment: { id: "d1", label: "Dev" },
+          version: { id: "v1", label: "Unknown" },
+        },
+        {
+          id: "2",
+          createdOn: "",
+          updatedOn: "",
+          description: null,
+          product: { id: "p2", label: "WSO2 API Manager" },
+          deployment: { id: "d1", label: "Dev" },
+          version: { id: "v2", label: "4.2.0" },
+        },
+      ];
+      expect(getBaseProductOptions(products)).toEqual([
+        { id: "2", label: "WSO2 API Manager 4.2.0" },
+      ]);
     });
   });
 

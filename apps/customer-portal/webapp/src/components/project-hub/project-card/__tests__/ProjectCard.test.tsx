@@ -43,10 +43,8 @@ vi.mock("../ProjectCardBadges", () => ({
 }));
 
 vi.mock("../ProjectCardInfo", () => ({
-  default: ({ title, subtitle }: any) => (
-    <div data-testid="info">
-      {title} {subtitle}
-    </div>
+  default: ({ title }: { title: string }) => (
+    <div data-testid="info">{title}</div>
   ),
 }));
 
@@ -96,7 +94,6 @@ describe("ProjectCard", () => {
     projectKey: "PROJ",
     slaStatus: "Needs Attention",
     title: "Project Title",
-    subtitle: "<p>Project Subtitle</p>",
     date: "2026-01-17",
     activeCasesCount: 10,
     activeChatsCount: 5,

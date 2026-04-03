@@ -3,6 +3,7 @@
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
 // in compliance with the License.
+//
 // You may obtain a copy of the License at
 //
 // http://www.apache.org/licenses/LICENSE-2.0
@@ -15,12 +16,10 @@
 // under the License.
 
 import { Box, Form, Tooltip, Typography } from "@wso2/oxygen-ui";
-import { type JSX, useMemo, useRef, useState, useEffect } from "react";
-import { stripHtmlTags } from "@utils/projectCard";
+import { type JSX, useRef, useState, useEffect } from "react";
 
 interface ProjectCardInfoProps {
   title: string;
-  subtitle: string;
 }
 
 /**
@@ -78,24 +77,18 @@ function ClampedTextWithTooltip({
   return content;
 }
 
-// Fixed heights so all cards match: 2-line title and 4-line description.
-const TITLE_BLOCK_HEIGHT = "3.2rem"; // 2 lines at ~1.6rem line-height
-const DESCRIPTION_BLOCK_HEIGHT = "6rem"; // 4 lines at ~1.5rem line-height
+const TITLE_BLOCK_HEIGHT = "3.2rem";
 
 /**
- * Component to render the title and subheader for the Project Card.
- * Title clamped to 2 lines, description to 4 lines; fixed block heights so all cards match; tooltip when truncated.
+ * Renders the project card title (no description on hub cards).
  *
  * @param {ProjectCardInfoProps} props - The props for the component.
  * @returns {JSX.Element} The rendered info section.
  */
 export default function ProjectCardInfo({
   title,
-  subtitle,
 }: ProjectCardInfoProps): JSX.Element {
-  const strippedSubtitle = useMemo(() => stripHtmlTags(subtitle), [subtitle]);
   const displayTitle = title || "--";
-  const displaySubtitle = strippedSubtitle || "--";
 
   return (
     <Form.CardHeader
@@ -107,14 +100,6 @@ export default function ProjectCardInfo({
             lineClamp={2}
             variant="h6"
             sx={{ mb: 1 }}
-          />
-        </Box>
-      }
-      subheader={
-        <Box sx={{ height: DESCRIPTION_BLOCK_HEIGHT, overflow: "hidden" }}>
-          <ClampedTextWithTooltip
-            text={displaySubtitle}
-            lineClamp={4}
           />
         </Box>
       }

@@ -286,7 +286,6 @@ export default function ProjectHub(): JSX.Element {
               projectKey={project.key}
               slaStatus={project.slaStatus}
               title={project.name}
-              subtitle={project.description}
               date={project.createdOn}
               activeCasesCount={project.activeCasesCount}
               activeChatsCount={project.activeChatsCount}

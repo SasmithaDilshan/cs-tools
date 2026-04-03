@@ -33,7 +33,6 @@ export interface ProjectCardProps {
   onViewDashboard?: () => void;
   projectKey: string;
   slaStatus: string;
-  subtitle: string;
   title: string;
 }
 
@@ -48,7 +47,6 @@ export default function ProjectCard({
   projectKey,
   slaStatus,
   title,
-  subtitle,
   date,
   activeCasesCount,
   activeChatsCount,
@@ -79,13 +77,13 @@ export default function ProjectCard({
         display: "flex",
         flexDirection: "column",
         width: "100%",
-        minHeight: 320,
+        minHeight: 260,
       }}
     >
       {/* project card badges */}
       <ProjectCardBadges projectKey={projectKey} slaStatus={slaStatus} />
       {/* project card info */}
-      <ProjectCardInfo subtitle={subtitle} title={title} />
+      <ProjectCardInfo title={title} />
       {/* project card stats */}
       <ProjectCardStats
         activeChatsCount={activeChatsCount}

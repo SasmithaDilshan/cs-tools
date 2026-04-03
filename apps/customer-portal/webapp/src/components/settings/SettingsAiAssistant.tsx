@@ -38,7 +38,7 @@ interface SettingsAiAssistantProps {
   projectId: string;
 }
 
-type PatchSuccessKind = "novera" | "kb" | "noveraAndKb";
+type PatchSuccessKind = "novera" | "kb";
 
 /**
  * AI Assistant settings: Novera chat and Smart Knowledge Base suggestions (hasKbReferences).
@@ -103,12 +103,10 @@ export default function SettingsAiAssistant({
       const messages: Record<PatchSuccessKind, string> = {
         novera: "AI Chat Assistant (Novera) was updated successfully.",
         kb: "Smart Knowledge Base suggestions were updated successfully.",
-        noveraAndKb:
-          "AI assistant and Smart Knowledge Base settings were updated successfully.",
       };
       showSuccess(messages[kind]);
     },
-    [projectDetails?.hasAgent, projectId, refetchProjects, showSuccess],
+    [projectDetails, projectId, refetchProjects, showSuccess],
   );
 
   const handlePatchError = useCallback(
@@ -130,22 +128,17 @@ export default function SettingsAiAssistant({
       if (!checked) {
         setKbOverride(false);
       }
-      patchProject.mutate(
-        checked
-          ? { hasAgent: true }
-          : { hasAgent: false, hasKbReferences: false },
-        {
-          onSuccess: () => {
-            void notifyPatchSuccess(checked ? "novera" : "noveraAndKb");
-          },
-          onError: (err) => {
-            handlePatchError(err);
-            setNoveraOverride(null);
-            setKbOverride(null);
-            setNoveraChatEnabled(rollbackNovera);
-          },
+      patchProject.mutate(checked ? { hasAgent: true } : { hasAgent: false }, {
+        onSuccess: () => {
+          void notifyPatchSuccess("novera");
         },
-      );
+        onError: (err) => {
+          handlePatchError(err);
+          setNoveraOverride(null);
+          setKbOverride(null);
+          setNoveraChatEnabled(rollbackNovera);
+        },
+      });
     },
     [noveraEnabled, patchProject, notifyPatchSuccess, handlePatchError],
   );

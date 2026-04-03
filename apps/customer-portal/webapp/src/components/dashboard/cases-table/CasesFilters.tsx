@@ -70,7 +70,7 @@ export default function CasesFilters({
                 label={field.label}
                 onChange={handleSelectChange(field.id)}
                 MenuProps={{
-                  PaperProps: {
+                  MenuListProps: {
                     onScroll: (e: UIEvent<HTMLElement>) => {
                       if (
                         !field.onLoadMore ||

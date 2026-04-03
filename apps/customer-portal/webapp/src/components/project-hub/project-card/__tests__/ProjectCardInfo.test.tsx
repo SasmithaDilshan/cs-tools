@@ -3,6 +3,7 @@
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
 // in compliance with the License.
+//
 // You may obtain a copy of the License at
 //
 // http://www.apache.org/licenses/LICENSE-2.0
@@ -18,22 +19,26 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ProjectCardInfo from "@components/project-hub/project-card/ProjectCardInfo";
 
-// Mock @wso2/oxygen-ui
 vi.mock("@wso2/oxygen-ui", () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Box: ({ children, sx }: any) => (
     <div data-testid="box" style={sx}>
       {children}
     </div>
   ),
   Form: {
-    CardHeader: ({ title, subheader }: any) => (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    CardHeader: ({ title }: any) => (
       <div data-testid="card-header">
         <div data-testid="title">{title}</div>
-        <div data-testid="subheader">{subheader}</div>
       </div>
     ),
   },
-  Tooltip: ({ children }: any) => <span data-testid="tooltip">{children}</span>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Tooltip: ({ children }: any) => (
+    <span data-testid="tooltip">{children}</span>
+  ),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Typography: ({ children, variant, sx }: any) => (
     <span data-testid={`typography-${variant}`} style={sx}>
       {children}
@@ -42,37 +47,18 @@ vi.mock("@wso2/oxygen-ui", () => ({
 }));
 
 describe("ProjectCardInfo", () => {
-  it("should strip HTML tags from subtitle", () => {
-    const props = {
-      title: "Test Project",
-      subtitle: "<p>This is a test subtitle</p>",
-    };
-
-    render(<ProjectCardInfo {...props} />);
-
-    expect(screen.getByText("This is a test subtitle")).toBeInTheDocument();
+  it("renders project title", () => {
+    render(<ProjectCardInfo title="My Project" />);
+    expect(screen.getByText("My Project")).toBeInTheDocument();
   });
 
-  it("should use correct Typography variants", () => {
-    const props = {
-      title: "Title",
-      subtitle: "Subtitle",
-    };
-
-    render(<ProjectCardInfo {...props} />);
-
+  it("uses h6 typography for title", () => {
+    render(<ProjectCardInfo title="Title" />);
     expect(screen.getByTestId("typography-h6")).toBeInTheDocument();
-    expect(screen.getByTestId("typography-body2")).toBeInTheDocument();
   });
 
-  it("should display '--' fallback for empty title and subtitle", () => {
-    const props = {
-      title: "",
-      subtitle: "",
-    };
-
-    render(<ProjectCardInfo {...props} />);
-
-    expect(screen.getAllByText("--")).toHaveLength(2);
+  it("displays '--' fallback for empty title", () => {
+    render(<ProjectCardInfo title="" />);
+    expect(screen.getByText("--")).toBeInTheDocument();
   });
 });

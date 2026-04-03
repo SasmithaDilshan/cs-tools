@@ -301,8 +301,14 @@ export default function AllUpdatesTab(): JSX.Element {
                   label="Product Name *"
                   onChange={handleFilterChange("productName")}
                 >
-                  <MenuItem value="">
-                    <Typography variant="body2">Select Product</Typography>
+                  <MenuItem value="" disabled>
+                    <Typography variant="body2">
+                      {isProductLevelsLoading
+                        ? "Select Product"
+                        : productNames.length === 0
+                          ? "No products available"
+                          : "Select Product"}
+                    </Typography>
                   </MenuItem>
                   {productNames.map((name) => (
                     <MenuItem key={name} value={name}>
@@ -322,8 +328,16 @@ export default function AllUpdatesTab(): JSX.Element {
                   label="Product Version *"
                   onChange={handleFilterChange("productVersion")}
                 >
-                  <MenuItem value="">
-                    <Typography variant="body2">Select Version</Typography>
+                  <MenuItem value="" disabled>
+                    <Typography variant="body2">
+                      {!filter.productName
+                        ? "Select Version"
+                        : isProductLevelsLoading
+                          ? "Select Version"
+                          : versionEntries.length === 0
+                            ? "No versions available"
+                            : "Select Version"}
+                    </Typography>
                   </MenuItem>
                   {versionEntries.map((v) => (
                     <MenuItem key={v.productBaseVersion} value={v.productBaseVersion}>
@@ -343,8 +357,14 @@ export default function AllUpdatesTab(): JSX.Element {
                   label="Starting Update Level *"
                   onChange={handleFilterChange("startLevel")}
                 >
-                  <MenuItem value="">
-                    <Typography variant="body2">Select Level</Typography>
+                  <MenuItem value="" disabled>
+                    <Typography variant="body2">
+                      {!filter.productVersion
+                        ? "Select Level"
+                        : startLevelOptions.length === 0
+                          ? "No starting update levels available"
+                          : "Select Level"}
+                    </Typography>
                   </MenuItem>
                   {startLevelOptions.map((level) => (
                     <MenuItem key={level} value={String(level)}>
@@ -364,8 +384,14 @@ export default function AllUpdatesTab(): JSX.Element {
                   label="Ending Update Level *"
                   onChange={handleFilterChange("endLevel")}
                 >
-                  <MenuItem value="">
-                    <Typography variant="body2">Select Level</Typography>
+                  <MenuItem value="" disabled>
+                    <Typography variant="body2">
+                      {!filter.startLevel
+                        ? "Select Level"
+                        : endLevelOptions.length === 0
+                          ? "No ending update levels available"
+                          : "Select Level"}
+                    </Typography>
                   </MenuItem>
                   {endLevelOptions.map((level) => (
                     <MenuItem key={level} value={String(level)}>
