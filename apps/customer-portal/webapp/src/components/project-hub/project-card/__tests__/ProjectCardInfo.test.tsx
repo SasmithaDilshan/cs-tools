@@ -16,7 +16,7 @@
 // under the License.
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import { ThemeProvider, createTheme } from "@wso2/oxygen-ui";
 import ProjectCardInfo from "@components/project-hub/project-card/ProjectCardInfo";
