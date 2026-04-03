@@ -56,6 +56,7 @@ import {
   getBaseProductOptions,
   getDeploymentDisplayLabelForEnvironment,
   getDeploymentProductDisplayLabel,
+  isUnknownPlaceholderProductLabel,
   resolveDeploymentMatch,
   resolveIssueTypeKey,
   resolveProductId,
@@ -184,7 +185,12 @@ export default function CreateCasePage(): JSX.Element {
     const items = deploymentProductsQuery.data?.pages.flatMap((page) =>
       extractDeploymentProducts(page),
     ) ?? [];
-    return items.filter((item) => item.product?.label?.trim());
+    return items.filter((item) => {
+      const label = getDeploymentProductDisplayLabel(item);
+      return (
+        Boolean(label.trim()) && !isUnknownPlaceholderProductLabel(label)
+      );
+    });
   }, [deploymentProductsQuery.data]);
   const baseProductOptions = getBaseProductOptions(allDeploymentProducts);
 
