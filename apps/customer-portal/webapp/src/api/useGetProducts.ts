@@ -71,5 +71,6 @@ export function useGetProducts(params?: {
     },
     enabled: isSignedIn && !isAuthLoading,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 }

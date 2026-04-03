@@ -38,7 +38,7 @@ import {
   Trash2,
   Zap,
 } from "@wso2/oxygen-ui-icons-react";
-import { useState, type JSX } from "react";
+import { useMemo, useState, type JSX } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePostDeploymentProductsSearchAll } from "@api/usePostDeploymentProductsSearch";
 import { usePatchDeploymentProduct } from "@api/usePatchDeploymentProduct";
@@ -81,15 +81,16 @@ function ProductsSkeleton(): JSX.Element {
                 alignItems: "flex-start",
                 gap: 1.5,
                 flex: 1,
+                minWidth: 0,
               }}
             >
               <Skeleton
                 variant="rounded"
-                width={20}
-                height={20}
+                width={16}
+                height={16}
                 sx={{ mt: 0.25, flexShrink: 0 }}
               />
-              <Box sx={{ flex: 1 }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Box
                   sx={{
                     display: "flex",
@@ -99,14 +100,13 @@ function ProductsSkeleton(): JSX.Element {
                     flexWrap: "wrap",
                   }}
                 >
-                  <Skeleton variant="text" width="35%" height={20} />
-                  <Skeleton variant="rounded" width={50} height={20} />
-                  <Skeleton variant="rounded" width={24} height={24} />
+                  <Skeleton variant="text" width="42%" height={22} />
+                  <Skeleton variant="rounded" width={56} height={20} />
                 </Box>
                 <Skeleton
                   variant="text"
-                  width="70%"
-                  height={16}
+                  width="88%"
+                  height={14}
                   sx={{ mb: 1.5 }}
                 />
                 <Box
@@ -118,15 +118,17 @@ function ProductsSkeleton(): JSX.Element {
                     mb: 1.5,
                   }}
                 >
-                  <Skeleton variant="text" width={70} height={16} />
-                  <Skeleton variant="text" width={60} height={16} />
-                  <Skeleton variant="text" width={100} height={16} />
-                  <Skeleton variant="text" width={50} height={16} />
+                  <Skeleton variant="text" width="72%" height={14} />
+                  <Skeleton variant="text" width="68%" height={14} />
+                  <Skeleton variant="text" width="78%" height={14} />
+                  <Skeleton variant="text" width="64%" height={14} />
                 </Box>
-                <Skeleton variant="rounded" width={120} height={20} />
+                <Skeleton variant="rounded" width={132} height={20} />
               </Box>
             </Box>
-            <Box sx={{ display: "flex", gap: 0.25 }}>
+            <Box
+              sx={{ display: "flex", gap: 0.25, alignItems: "center" }}
+            >
               <Skeleton variant="rounded" width={32} height={32} />
               <Skeleton variant="rounded" width={32} height={32} />
             </Box>
@@ -164,6 +166,10 @@ export default function DeploymentProductList({
     enabled: !!deploymentId,
   });
   const products = productsQuery.data ?? [];
+  const manageModalProduct = useMemo((): DeploymentProductItem | null => {
+    if (!editingProduct) return null;
+    return products.find((p) => p.id === editingProduct.id) ?? editingProduct;
+  }, [products, editingProduct]);
   const isLoading = productsQuery.isLoading;
   const isFetching = productsQuery.isFetching;
   const isError = productsQuery.isError;
@@ -287,10 +293,9 @@ export default function DeploymentProductList({
         <ManageProductModal
           open={!!editingProduct}
           deploymentId={deploymentId}
-          product={editingProduct}
+          product={manageModalProduct}
           onClose={() => setEditingProduct(null)}
           onSuccess={() => {
-            setEditingProduct(null);
             queryClient.invalidateQueries({
               queryKey: [ApiQueryKeys.DEPLOYMENT_PRODUCTS, deploymentId],
             });

@@ -32,13 +32,24 @@ import { X } from "@wso2/oxygen-ui-icons-react";
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ChangeEvent,
   type JSX,
 } from "react";
 import { usePatchDeploymentProduct } from "@api/usePatchDeploymentProduct";
 import type { DeploymentProductItem, ProductUpdate } from "@models/responses";
-import UpdateHistoryTab from "@components/project-details/deployments/UpdateHistoryTab";
+import UpdateHistoryTab, {
+  type UpdateHistorySaveAction,
+} from "@components/project-details/deployments/UpdateHistoryTab";
+
+function updateHistoryFooterSavingLabel(
+  action: UpdateHistorySaveAction | null,
+): string {
+  if (action === "delete") return "Deleting Update...";
+  if (action === "edit") return "Saving Update...";
+  return "Adding...";
+}
 
 /**
  * Validates and parses a string to a finite non-negative number.
@@ -48,6 +59,28 @@ function validateFiniteNonNegative(value: string): number | undefined {
   if (!value || !value.trim()) return undefined;
   const num = Number(value);
   return Number.isFinite(num) && num >= 0 ? num : undefined;
+}
+
+/**
+ * Value aligned with GET /updates/recommended-update-levels `productName` (abbreviation when present).
+ */
+function recommendedLevelsProductKey(
+  product: DeploymentProductItem["product"] | undefined,
+): string {
+  const abbr = product?.abbreviation?.trim();
+  if (abbr) {
+    return abbr;
+  }
+  return product?.label?.trim() ?? "";
+}
+
+function deployedProductVersionLabel(
+  version: DeploymentProductItem["version"],
+): string {
+  if (typeof version === "string") {
+    return version;
+  }
+  return version?.label?.trim() ?? "";
 }
 
 export interface ManageProductModalProps {
@@ -63,6 +96,7 @@ export interface ManageProductModalProps {
  * Modal for managing (editing) a deployment product.
  * Product Details tab: Core Count, TPS, and Description are editable.
  * Update History tab: View, add, edit, and delete product updates.
+ * Dismiss only via Close; successful saves refresh list data without closing.
  *
  * @param {ManageProductModalProps} props - open, deploymentId, product, onClose, optional onSuccess/onError.
  * @returns {JSX.Element | null} The manage product modal or null when product is missing.
@@ -82,18 +116,27 @@ export default function ManageProductModal({
   const [addUpdateState, setAddUpdateState] = useState<{
     canAdd: boolean;
     isSaving: boolean;
+    saveAction: UpdateHistorySaveAction | null;
     handleAdd: () => void;
   } | null>(null);
 
   const patchProduct = usePatchDeploymentProduct();
   const isSubmitting = patchProduct.isPending;
+  const lastHydratedProductIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (open && product) {
+    if (!open) {
+      lastHydratedProductIdRef.current = null;
+      return;
+    }
+    if (!product?.id) return;
+
+    if (lastHydratedProductIdRef.current !== product.id) {
       setCores(typeof product.cores === "number" ? String(product.cores) : "");
       setTps(typeof product.tps === "number" ? String(product.tps) : "");
       setDescription(product.description ?? "");
       setTabValue(0);
+      lastHydratedProductIdRef.current = product.id;
     }
   }, [open, product]);
 
@@ -146,9 +189,7 @@ export default function ManageProductModal({
       body.description = newDescription || undefined;
     }
 
-    // If nothing changed, just close
     if (Object.keys(body).length === 0) {
-      handleClose();
       return;
     }
 
@@ -158,7 +199,6 @@ export default function ManageProductModal({
         productId: product.id,
         body,
       });
-      handleClose();
       onSuccess?.();
     } catch (error) {
       onError?.(
@@ -175,7 +215,6 @@ export default function ManageProductModal({
     tps,
     description,
     patchProduct,
-    handleClose,
     onSuccess,
     onError,
   ]);
@@ -305,12 +344,8 @@ export default function ManageProductModal({
         {tabValue === 1 && (
           <UpdateHistoryTab
             updates={product.updates ?? []}
-            productName={product.product?.label || ""}
-            productVersion={
-              typeof product.version === "string"
-                ? product.version
-                : product.version?.label || ""
-            }
+            productName={recommendedLevelsProductKey(product.product)}
+            productVersion={deployedProductVersionLabel(product.version)}
             isLoading={false}
             onSaveUpdates={handleSaveUpdates}
             onFormStateChange={setAddUpdateState}
@@ -356,7 +391,7 @@ export default function ManageProductModal({
               startIcon={<CircularProgress color="inherit" size={16} />}
               disabled
             >
-              Adding...
+              {updateHistoryFooterSavingLabel(addUpdateState.saveAction)}
             </Button>
           ) : (
             <Button

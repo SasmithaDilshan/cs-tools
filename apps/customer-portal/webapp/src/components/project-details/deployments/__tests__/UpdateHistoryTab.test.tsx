@@ -19,6 +19,29 @@ import { describe, it, expect, vi } from "vitest";
 import UpdateHistoryTab from "@components/project-details/deployments/UpdateHistoryTab";
 import type { ProductUpdate } from "@models/responses";
 
+vi.mock("@api/useGetRecommendedUpdateLevels", () => ({
+  useGetRecommendedUpdateLevels: () => ({
+    data: [],
+    isLoading: false,
+  }),
+}));
+
+vi.mock("@api/usePostUpdateLevelsSearch", () => ({
+  usePostUpdateLevelsSearch: () => ({
+    data: null,
+    isLoading: false,
+    isFetching: false,
+  }),
+}));
+
+vi.mock("@context/success-banner/SuccessBannerContext", () => ({
+  useSuccessBanner: () => ({ showSuccess: vi.fn() }),
+}));
+
+vi.mock("@context/error-banner/ErrorBannerContext", () => ({
+  useErrorBanner: () => ({ showError: vi.fn() }),
+}));
+
 describe("UpdateHistoryTab", () => {
   const mockUpdates: ProductUpdate[] = [
     {
