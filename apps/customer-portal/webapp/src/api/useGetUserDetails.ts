@@ -47,6 +47,7 @@ const useGetUserDetails = (): UseQueryResult<UserDetails, Error> => {
 
         const response = await authFetch(requestUrl, {
           method: "GET",
+          cache: "no-store",
         });
 
         logger.debug(`[useGetUserDetails] Response status: ${response.status}`);
@@ -66,9 +67,9 @@ const useGetUserDetails = (): UseQueryResult<UserDetails, Error> => {
       }
     },
     enabled: isSignedIn && !isAuthLoading,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
+    refetchOnMount: true,
   });
 };
 
