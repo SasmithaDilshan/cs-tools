@@ -23,6 +23,7 @@ import { useAsgardeo } from "@asgardeo/react";
 import { useAuthApiClient } from "@api/useAuthApiClient";
 import { useLogger } from "@hooks/useLogger";
 import type { PatchUserMeRequest } from "@models/requests";
+import type { UserDetails } from "@models/responses";
 
 export interface PatchUserMeResponse {
   phoneNumber?: string;
@@ -83,8 +84,27 @@ export function usePatchUserMe(): UseMutationResult<
       }
       return (await response.json()) as PatchUserMeResponse;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["userDetails"] });
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData<UserDetails>(["userDetails"], (old) => {
+        if (!old) {
+          return old;
+        }
+        return {
+          ...old,
+          ...(variables.timeZone !== undefined
+            ? { timeZone: variables.timeZone }
+            : {}),
+          ...(variables.phoneNumber !== undefined
+            ? {
+                phoneNumber:
+                  data.phoneNumber !== undefined
+                    ? data.phoneNumber
+                    : variables.phoneNumber,
+              }
+            : {}),
+        };
+      });
+      void queryClient.invalidateQueries();
     },
   });
 }
