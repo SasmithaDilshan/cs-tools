@@ -25,6 +25,7 @@ import SearchBar from "@components/common/header/SearchBar";
 import ProjectSwitcher from "@components/common/header/ProjectSwitcher";
 import { useAsgardeo } from "@asgardeo/react";
 import { shouldExcludeS0 } from "@utils/subscriptionUtils";
+import { setLastSelectedProjectId } from "@utils/settingsStorage";
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -73,6 +74,13 @@ export default function Header({ onToggleSidebar }: HeaderProps): JSX.Element {
     return projects.find((p) => p.id === projectId);
   }, [projectId, projects]);
 
+  useEffect(() => {
+    const id = projectId?.trim();
+    if (id) {
+      setLastSelectedProjectId(id);
+    }
+  }, [projectId]);
+
   const excludeS0 = shouldExcludeS0(selectedProject?.type?.label);
 
   /**
@@ -85,7 +93,7 @@ export default function Header({ onToggleSidebar }: HeaderProps): JSX.Element {
       const project = projects.find((p) => p.id === id);
       if (project) {
         logger.debug(`Switching to project: ${project.name} (${project.id})`);
-
+        setLastSelectedProjectId(project.id);
         navigate(`/projects/${project.id}/dashboard`);
       } else {
         logger.warn(`Project with ID ${id} not found for switching`);
