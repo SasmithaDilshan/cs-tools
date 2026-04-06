@@ -24,18 +24,10 @@ import customer_portal.types;
 import customer_portal.updates;
 import customer_portal.user_management;
 
-import ballerina/cache;
 import ballerina/http;
 import ballerina/log;
 import ballerina/time;
 import ballerina/websocket;
-
-final cache:Cache userCache = new ({
-    capacity: 500,
-    defaultMaxAge: 3600,
-    evictionFactor: 0.2,
-    cleanupInterval: 1800
-});
 
 service class ErrorInterceptor {
     *http:ResponseErrorInterceptor;
@@ -134,15 +126,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             };
         }
 
-        string cacheKey = string `${userInfo.email}:userinfo`;
-        if userCache.hasKey(cacheKey) {
-            types:User|error cachedUser = userCache.get(cacheKey).ensureType();
-            if cachedUser is types:User {
-                return cachedUser;
-            }
-            log:printWarn(string `Unable to read cached user info for ${userInfo.userId}.`, cachedUser);
-        }
-
         entity:UserResponse|error userDetails = entity:getUserBasicInfo(userInfo.email, userInfo.idToken);
         if userDetails is error {
             if getStatusCode(userDetails) == http:STATUS_UNAUTHORIZED {
@@ -188,7 +171,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             }
         }
 
-        types:User user = {
+        return {
             id: userDetails.id,
             email: userDetails.email,
             firstName: userDetails.firstName,
@@ -198,12 +181,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             phoneNumber,
             lastPasswordUpdateTime
         };
-
-        error? cacheError = userCache.put(cacheKey, user);
-        if cacheError is error {
-            log:printWarn("Error writing user information to cache", cacheError);
-        }
-        return user;
     }
 
     # Update user information of the logged in user.
@@ -242,11 +219,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
                     log:printError("Failed to update phone number.", updatedUser);
                 }
             } else {
-                error? cacheInvalidate = userCache.invalidate(string `${userInfo.email}:userinfo`);
-                if cacheInvalidate is error {
-                    log:printWarn(string `Error invalidating user: ${userInfo.userId} information from cache`,
-                            cacheInvalidate);
-                }
                 updatedUserResponse.phoneNumber = scim:processPhoneNumber(updatedUser);
             }
         }
@@ -261,11 +233,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
                     log:printError("Failed to update user timezone.", response);
                 }
             } else {
-                error? cacheInvalidate = userCache.invalidate(string `${userInfo.email}:userinfo`);
-                if cacheInvalidate is error {
-                    log:printWarn(string `Error invalidating user: ${userInfo.userId} information from cache`,
-                            cacheInvalidate);
-                }
                 updatedUserResponse.timeZone = timeZone;
             }
         }
@@ -2375,7 +2342,9 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
 
         entity:DeployedProductsResponse|error productsResponse = entity:searchDeployedProducts(userInfo.idToken,
                 {
-                    deploymentId: id,
+                    filters: {
+                        deploymentIds: [id]
+                    },
                     pagination: payload.pagination
                 });
         if productsResponse is error {

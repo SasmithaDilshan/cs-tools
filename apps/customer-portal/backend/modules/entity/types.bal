@@ -846,8 +846,13 @@ public type ProductUpdate record {|
 
 # Deployed product search payload
 public type DeployedProductSearchPayload record {|
-    # Deployment ID
-    IdString deploymentId;
+    # Filter criteria
+    record {|
+        # List of project IDs to filter
+        IdString[] projectIds?;
+        # List of deployment IDs to filter
+        IdString[] deploymentIds?;
+    |} filters?;
     # Pagination details
     Pagination pagination?;
 |};
