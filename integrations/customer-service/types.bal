@@ -32,4 +32,5 @@ public type Account record {|
 |};
 
 # Union type for common HTTP error responses.
-public type HttpErrorResponse http:BadRequest|http:Unauthorized|http:Forbidden|http:NotFound|http:InternalServerError;
+public type HttpErrorResponse http:BadRequest|http:Unauthorized|http:Forbidden|http:NotFound|http:BadGateway|
+    http:ServiceUnavailable|http:GatewayTimeout|http:InternalServerError;

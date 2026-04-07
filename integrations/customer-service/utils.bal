@@ -74,6 +74,15 @@ isolated function createHttpErrorResponse(int statusCode, string? entityMessage)
         http:STATUS_NOT_FOUND => {
             return <http:NotFound>{body};
         }
+        http:STATUS_BAD_GATEWAY => {
+            return <http:BadGateway>{body};
+        }
+        http:STATUS_SERVICE_UNAVAILABLE => {
+            return <http:ServiceUnavailable>{body};
+        }
+        http:STATUS_GATEWAY_TIMEOUT => {
+            return <http:GatewayTimeout>{body};
+        }
         _ => {
             return <http:InternalServerError>{body};
         }
