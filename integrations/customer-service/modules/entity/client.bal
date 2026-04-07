@@ -15,10 +15,39 @@
 // under the License.
 import ballerina/http;
 
-configurable string baseUrl = ?;
+// Sales Entity Configurations
+configurable string salesEntityBaseUrl = ?;
+
+// CS Entity Configurations
+configurable string csEntityBaseUrl = ?;
+configurable ClientCredentialsOauth2Config clientCredentialsOauth2Config = ?;
 
 @display {
     label: "Sales Entity Service",
     id: "sales/sales-entity-service"
 }
-final http:Client httpClient = check new (baseUrl);
+final http:Client salesEntityClient = check new (salesEntityBaseUrl);
+
+@display {
+    label: "CS Entity Service",
+    id: "cs/cs-entity-service"
+}
+final http:Client csEntityClient = check new (csEntityBaseUrl, {
+    auth: {
+        ...clientCredentialsOauth2Config
+    },
+    httpVersion: http:HTTP_1_1,
+    http1Settings: {keepAlive: http:KEEPALIVE_NEVER},
+    timeout: TIMEOUT,
+    retryConfig: {
+        count: RETRY_COUNT,
+        interval: RETRY_INTERVAL,
+        backOffFactor: RETRY_BACKOFF_FACTOR,
+        maxWaitInterval: RETRY_MAX_INTERVAL,
+        statusCodes: [
+            http:STATUS_BAD_GATEWAY,
+            http:STATUS_SERVICE_UNAVAILABLE,
+            http:STATUS_GATEWAY_TIMEOUT
+        ]
+    }
+});

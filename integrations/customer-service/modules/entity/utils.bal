@@ -13,24 +13,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-import ballerina/http;
 
-# Contact.
-public type Contact record {|
-    # ID
-    string? id;
-    # Email
-    string? email;
-    # Account information
-    Account? account = ();
-|};
-
-# Account.
-public type Account record {|
-    # Account ID
-    string? id;
-|};
-
-# Union type for common HTTP error responses.
-public type HttpErrorResponse http:BadRequest|http:Unauthorized|http:Forbidden|http:NotFound|http:BadGateway|
-    http:ServiceUnavailable|http:GatewayTimeout|http:InternalServerError;
+# Generate authorization headers.
+#
+# + token - ID token for authorization
+# + return - Map of headers with authorization
+isolated function generateHeaders(string token) returns map<string|string[]> => {"x-user-id-token": token};
