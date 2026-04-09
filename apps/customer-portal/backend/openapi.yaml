@@ -2844,6 +2844,7 @@ components:
         durationInMinutes:
           type: integer
           description: New duration in minutes for the call (mandatory when stateKey is 2)
+          format: int64
       additionalProperties: false
       description: Request payload for updating a call request.
     Case:
