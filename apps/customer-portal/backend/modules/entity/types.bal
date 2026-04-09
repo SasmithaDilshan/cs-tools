@@ -846,38 +846,15 @@ public type ProductUpdate record {|
 
 # Deployed product search payload
 public type DeployedProductSearchPayload record {|
-    # Deployment ID
-    IdString deploymentId;
-    # Filters
-    record {
-        # Consumption based filters
-        ConsumptionFilter consumption?;
-    } filters?;
+    # Filter criteria
+    record {|
+        # List of project IDs to filter
+        IdString[] projectIds?;
+        # List of deployment IDs to filter
+        IdString[] deploymentIds?;
+    |} filters?;
     # Pagination details
     Pagination pagination?;
-|};
-
-# Instance information.
-public type Instance record {|
-    # ID of the instance
-    IdString id;
-    # Instance identifier
-    string instance;
-    # Core usage count
-    int? coreUsageCount;
-    # Update count
-    int? updates;
-    # JDK version
-    string? jdkVersion;
-    # Created date and time
-    string? createdOn;
-    # Updated date and time
-    string? updatedOn;
-    # Custom created date and time
-    string? customCreatedOn;
-    # Custom updated date and time
-    string? customUpdatedOn;
-    json...;
 |};
 
 # Deployed product data.
@@ -908,10 +885,6 @@ public type DeployedProduct record {|
     string? releasedOn;
     # End of life date of the product
     string? endOfLifeOn;
-    # Instances of the deployed product
-    int instanceCount?;
-    # Details of the instances
-    Instance[]? instances?;
     json...;
 |};
 
@@ -1003,21 +976,206 @@ public type DeploymentSearchPayload record {|
     record {|
         # Project IDs
         IdString[] projectIds?;
-        # Consumption based filters
-        ConsumptionFilter consumption?;
     |} filters?;
     # Pagination details
     Pagination pagination?;
 |};
 
-# Consumption filter.
-public type ConsumptionFilter record {|
-    # Indicates whether to filter based on consumption (true to filter)
-    boolean include?;
-    # Start date of consumption
-    Date startDate?;
-    # End date of consumption
-    Date endDate?;
+# Instance search filters.
+public type InstanceSearchPayload record {|
+    # Filter criteria
+    record {|
+        # Start date of consumption
+        Date startDate?;
+        # End date of consumption
+        Date endDate?;
+        # List of project IDs (mutually exclusive with deploymentIds and deployedProductIds)
+        IdString[] projectIds?;
+        # List of deployment IDs (mutually exclusive with projectIds and deployedProductIds)
+        IdString[] deploymentIds?;
+        # List of deployed product IDs (mutually exclusive with projectIds and deploymentIds)
+        IdString[] deployedProductIds?;
+    |} filters?;
+    # Pagination details
+    Pagination pagination?;
+|};
+
+# Instance metadata.
+public type InstanceMetadata record {|
+    # ID
+    IdString id;
+    # Core count
+    int? coreCount;
+    # Number of updates
+    int? updates;
+    # JDK version
+    string? jdkVersion;
+    # Deployment-specific metadata
+    map<json>? deploymentMetadata;
+    # Created date and time
+    string createdOn;
+    # Updated date and time
+    string updatedOn;
+    # Custom created date and time
+    string? customCreatedOn;
+    # Custom updated date and time
+    string? customUpdatedOn;
+    json...;
+|};
+
+# Instance data.
+public type Instance record {|
+    # ID
+    IdString id;
+    # Key
+    string key;
+    # Associated project information
+    ReferenceTableItem? project;
+    # Associated deployment information
+    ReferenceTableItem? deployment;
+    # Associated product information
+    ReferenceTableItem? product;
+    # Associated deployed product information
+    ReferenceTableItem? deployedProduct;
+    # Created date and time
+    string createdOn;
+    # Updated date and time
+    string updatedOn;
+    # Instance metadata
+    InstanceMetadata? metadata;
+    json...;
+|};
+
+# Instances response.
+public type InstancesResponse record {|
+    # List of instances
+    Instance[] instances;
+    # Total records count
+    int totalRecords;
+    *Pagination;
+    json...;
+|};
+
+# Payload for fetching instance metrics.
+public type InstanceMetricsPayload record {|
+    # Filter criteria — startDate and endDate are required
+    record {|
+        # Start date
+        Date startDate;
+        # End date
+        Date endDate;
+        # List of project IDs
+        IdString[] projectIds?;
+        # List of deployment IDs
+        IdString[] deploymentIds?;
+        # List of deployed product IDs
+        IdString[] deployedProductIds?;
+    |} filters;
+|};
+
+# A single metric data point for an instance.
+public type InstanceDataPoint record {|
+    # Date of the data point
+    string date;
+    # Created date and time
+    string createdOn;
+    # Core count at this data point
+    int? coreCount;
+    # JDK version at this data point
+    string? jdkVersion;
+    # Number of updates at this data point
+    int? updates;
+    # Deployment-specific metadata
+    map<json>? deploymentMetadata;
+    json...;
+|};
+
+# Per-node metrics entry.
+public type InstanceMetric record {|
+    # ID
+    string instanceId;
+    # Instance key
+    string instanceKey;
+    # Associated project information
+    ReferenceTableItem? project;
+    # Associated deployment information
+    ReferenceTableItem? deployment;
+    # Associated product information
+    ReferenceTableItem? product;
+    # Associated deployed product information
+    ReferenceTableItem? deployedProduct;
+    # Data points ordered newest to oldest; empty if no changes in window
+    InstanceDataPoint[] dataPoints;
+    json...;
+|};
+
+# Metrics response.
+public type InstanceMetricsResponse record {|
+    # List of per-node metric entries
+    InstanceMetric[] metrics;
+    # Total number of nodes
+    int totalInstances;
+    # Start date of the queried range
+    string startDate;
+    # End date of the queried range
+    string endDate;
+|};
+
+# Single summary entry for an instance.
+public type InstanceSummary record {|
+    # Period
+    string period;
+    # Pivoted counts keyed by count type (e.g. TOTAL_USERS, TRANSACTION_COUNT)
+    map<int> counts;
+    json...;
+|};
+
+# Per-node usage entry.
+public type InstanceUsageEntry record {|
+    # ID
+    string instanceId;
+    # Instance key
+    string instanceKey;
+    # Associated project information
+    ReferenceTableItem? project;
+    # Associated deployment information
+    ReferenceTableItem? deployment;
+    # Associated product information
+    ReferenceTableItem? product;
+    # Associated deployed product information
+    ReferenceTableItem? deployedProduct;
+    # Summaries ordered by date; empty if no rows in the date range
+    InstanceSummary[] periodSummaries;
+    json...;
+|};
+
+# Usage summary response.
+public type InstanceUsageResponse record {|
+    # List of per-node usage entries
+    InstanceUsageEntry[] usages;
+    # Total number of nodes
+    int totalInstances;
+    # Start date of the queried range
+    string startDate;
+    # End date of the queried range
+    string endDate;
+|};
+
+# Payload for fetching instance usage.
+public type InstanceUsagePayload record {|
+    # Filter criteria
+    record {|
+        # Start date
+        Date startDate;
+        # End date
+        Date endDate;
+        # List of project IDs
+        IdString[] projectIds?;
+        # List of deployment IDs
+        IdString[] deploymentIds?;
+        # List of deployed product IDs
+        IdString[] deployedProductIds?;
+    |} filters;
 |};
 
 # Deployment data.
@@ -1038,10 +1196,6 @@ public type Deployment record {|
     ReferenceTableItem? project;
     # Type
     ChoiceListItem? 'type;
-    # Count of deployed products associated with the deployment
-    int deployedProductCount?;
-    # Count of instances associated with the deployment
-    int instanceCount?;
     json...;
 |};
 

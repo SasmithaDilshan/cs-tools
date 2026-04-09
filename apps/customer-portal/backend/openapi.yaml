@@ -1,7 +1,7 @@
 openapi: 3.0.1
 info:
   title: Service Openapi Yaml
-  version: 0.1.0
+  version: 1.0.0-rc.3
 servers:
 - url: "{server}:{port}/"
   variables:
@@ -272,6 +272,39 @@ paths:
           description: InternalServerError
         "403":
           description: Forbidden
+  /projects/{id}/instances/search:
+    post:
+      summary: Search instances of a project.
+      operationId: postProjectsIdInstancesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the project
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Payload for searching instances of the project
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceSearchPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
   /deployments/{id}/attachments:
     get:
       summary: Get attachments for a specific deployment.
@@ -380,6 +413,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpdatedAttachment'
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /deployments/{id}/instances/search:
+    post:
+      summary: Search instances of a deployment.
+      operationId: postDeploymentsIdInstancesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployment
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Payload for searching instances of the deployment
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceSearchPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
         "400":
           description: BadRequest
           content:
@@ -1354,6 +1420,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorPayload'
+  /deployments/products/{id}/instances/search:
+    post:
+      summary: Search instances for a specific deployed product with filters and pagination.
+      operationId: postDeploymentsProductsIdInstancesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployed product
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance search request body
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceSearchPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
   /catalogs/{catalogId}/items/{itemId}:
     get:
       summary: Get catalog item variables by catalog ID and item ID.
@@ -2345,6 +2444,208 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorPayload'
+  /projects/{id}/instances/metrics/search:
+    post:
+      summary: Search instance metrics for a specific project based on provided filters.
+      operationId: postProjectsIdInstancesMetricsSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the project
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /deployments/{id}/instances/metrics/search:
+    post:
+      summary: Search instance metrics for a specific deployment based on provided
+        filters.
+      operationId: postDeploymentsIdInstancesMetricsSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployment
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /deployments/products/{id}/instances/metrics/search:
+    post:
+      summary: Search instance metrics for a specific deployed product based on provided
+        filters.
+      operationId: postDeploymentsProductsIdInstancesMetricsSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployed product
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /projects/{id}/instances/usages/search:
+    post:
+      summary: Search instance usages for a specific project based on provided filters.
+      operationId: postProjectsIdInstancesUsagesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the project
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /deployments/{id}/instances/usages/search:
+    post:
+      summary: Search instance usages for a specific deployment based on provided
+        filters.
+      operationId: postDeploymentsIdInstancesUsagesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployment
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
+  /deployments/products/{id}/instances/usages/search:
+    post:
+      summary: Search instance usages for a specific deployed product based on provided
+        filters.
+      operationId: postDeploymentsProductsIdInstancesUsagesSearch
+      parameters:
+      - name: id
+        in: path
+        description: ID of the deployed product
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdString'
+      requestBody:
+        description: Instance metrics search payload containing filter criteria
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceMetricsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+        "500":
+          description: InternalServerError
+        "403":
+          description: Forbidden
 components:
   schemas:
     Account:
@@ -3330,18 +3631,6 @@ components:
           limit:
             type: integer
             format: int64
-    ConsumptionFilter:
-      type: object
-      properties:
-        include:
-          type: boolean
-          description: Indicates whether to filter based on consumption (true to filter)
-        startDate:
-          $ref: '#/components/schemas/Date'
-        endDate:
-          $ref: '#/components/schemas/Date'
-      additionalProperties: false
-      description: Consumption filter.
     Contact:
       required:
       - email
@@ -3766,12 +4055,6 @@ components:
     DeployedProductSearchPayload:
       type: object
       properties:
-        filters:
-          type: object
-          properties:
-            consumption:
-              $ref: '#/components/schemas/ConsumptionFilter'
-          description: Filters
         pagination:
           $ref: '#/components/schemas/Pagination'
       additionalProperties: false
@@ -3826,13 +4109,6 @@ components:
     DeploymentSearchPayload:
       type: object
       properties:
-        filters:
-          type: object
-          properties:
-            consumption:
-              $ref: '#/components/schemas/ConsumptionFilter'
-          additionalProperties: false
-          description: Filter criteria
         pagination:
           $ref: '#/components/schemas/Pagination'
       additionalProperties: false
@@ -3923,6 +4199,41 @@ components:
           description: User who created
       additionalProperties: false
       description: Inline attachment.
+    InstanceMetricsPayload:
+      required:
+      - filters
+      type: object
+      properties:
+        filters:
+          required:
+          - endDate
+          - startDate
+          type: object
+          properties:
+            startDate:
+              $ref: '#/components/schemas/Date'
+            endDate:
+              $ref: '#/components/schemas/Date'
+          additionalProperties: false
+          description: Filter criteria
+      additionalProperties: false
+      description: Payload for fetching instance metrics.
+    InstanceSearchPayload:
+      type: object
+      properties:
+        filters:
+          type: object
+          properties:
+            startDate:
+              $ref: '#/components/schemas/Date'
+            endDate:
+              $ref: '#/components/schemas/Date'
+          additionalProperties: false
+          description: Filter criteria
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+      additionalProperties: false
+      description: Instance search filters.
     IntegrationUser:
       required:
       - email

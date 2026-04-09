@@ -554,3 +554,36 @@ public isolated function getProjectChangeRequestStats(string idToken, string pro
 
     return csEntityClient->/projects/[projectId]/change\-requests/stats.get(generateHeaders(idToken));
 }
+
+# Search instances by criteria.
+# 
+# + idToken - ID token for authorization
+# + payload - Instance search payload containing search criteria for instances
+# + return - Instances response containing matching instances or error
+public isolated function searchInstances(string idToken, InstanceSearchPayload payload) 
+    returns InstancesResponse|error {
+
+    return csEntityClient->/instances/search.post(payload, generateHeaders(idToken));
+}
+
+# Search instance metrics by criteria.
+#
+# + idToken - ID token for authorization
+# + payload - Instance metrics search payload containing search criteria for instance metrics
+# + return - Instance metrics response containing matching instance metrics or error
+public isolated function searchInstanceMetrics(string idToken, InstanceMetricsPayload payload)
+    returns InstanceMetricsResponse|error {
+
+    return csEntityClient->/instances/metrics/search.post(payload, generateHeaders(idToken));
+}
+
+# Search instance usage by criteria.
+#
+# + idToken - ID token for authorization
+# + payload - Instance usage search payload containing search criteria for instance usage summary
+# + return - Instance usage response containing matching instance usage summary or error
+public isolated function searchInstanceUsage(string idToken, InstanceUsagePayload payload)
+    returns InstanceUsageResponse|error {
+
+    return csEntityClient->/instances/usages/search.post(payload, generateHeaders(idToken));
+}
