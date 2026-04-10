@@ -929,7 +929,6 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             log:printError(ERR_MSG_CONVERSATION_STATISTICS, conversationStats);
             // To return other stats even if conversation stats retrieval fails, error will not be returned.
         }
-        types:OverallConversationStats mappedConversationStats = getConversationStats(conversationStats);
 
         // Fetch deployment stats
         entity:ProjectDeploymentStatsResponse|error deploymentStats =
@@ -950,7 +949,8 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
             projectStats: {
                 openCases: caseStats is entity:ProjectCaseStatsResponse ?
                     getOpenCasesCountFromProjectCasesStats(caseStats) : (),
-                activeChats: mappedConversationStats.activeCount,
+                activeChats: conversationStats is entity:ProjectConversationStatsResponse ?
+                    conversationStats.activeCount : (),
                 deployments: deploymentStats is entity:ProjectDeploymentStatsResponse ? deploymentStats.totalCount : (),
                 slaStatus: projectActivityStats is entity:ProjectStatsResponse ? projectActivityStats.slaStatus : ()
             },
