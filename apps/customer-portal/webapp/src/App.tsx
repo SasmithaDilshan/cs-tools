@@ -21,6 +21,7 @@ import HomePage from "@pages/HomePage";
 import ProjectHub from "@pages/ProjectHub";
 import ProjectPage from "@pages/ProjectPage";
 import ProjectDetails from "@pages/ProjectDetails";
+import ProjectGuard from "@layouts/ProjectGuard";
 import DashboardPage from "@pages/DashboardPage";
 import SupportPage from "@pages/SupportPage";
 import UpdatesPage from "@pages/UpdatesPage";
@@ -78,7 +79,7 @@ export default function App(): JSX.Element {
               <Route path="support" element={<ServiceNowCaseRedirectPage />} />
 
               {/* Project Specific Routes */}
-              <Route path="projects/:projectId">
+              <Route path="projects/:projectId" element={<ProjectGuard />}>
                 {/* Dashboard */}
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<DashboardPage />} />
