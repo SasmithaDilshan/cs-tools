@@ -110,6 +110,12 @@ export function usePatchUserMe(): UseMutationResult<
         };
       });
       void queryClient.invalidateQueries({ queryKey: ["userDetails"] });
+      if (variables.timeZone !== undefined) {
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] !== "userDetails",
+          refetchType: "active",
+        });
+      }
     },
   });
 }

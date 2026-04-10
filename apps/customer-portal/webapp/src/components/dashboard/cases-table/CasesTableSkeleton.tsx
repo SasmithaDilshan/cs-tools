@@ -55,9 +55,6 @@ const CasesTableSkeleton = ({
               <Skeleton variant="text" width={60} height={20} />
             </Box>
           </TableCell>
-          <TableCell>
-            <Skeleton variant="rounded" width={40} height={24} />
-          </TableCell>
         </TableRow>
       ))}
     </>

@@ -87,8 +87,28 @@ export function usePatchCase(
       return data;
     },
     onSuccess: () => {
+      const matchesProjectCases = (queryKey: readonly unknown[]): boolean => {
+        if (queryKey[0] !== ApiQueryKeys.PROJECT_CASES) return false;
+        if (queryKey[1] === "page") return queryKey[2] === projectId;
+        return queryKey[1] === projectId;
+      };
+
       queryClient.invalidateQueries({
         queryKey: [ApiQueryKeys.CASE_DETAILS, projectId, caseId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [ApiQueryKeys.CASES_STATS, projectId],
+      });
+      queryClient.invalidateQueries({
+        predicate: (query) => matchesProjectCases(query.queryKey),
+      });
+      void queryClient.refetchQueries({
+        queryKey: [ApiQueryKeys.CASES_STATS, projectId],
+        type: "active",
+      });
+      void queryClient.refetchQueries({
+        predicate: (query) => matchesProjectCases(query.queryKey),
+        type: "active",
       });
     },
   });

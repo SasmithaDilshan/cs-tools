@@ -89,7 +89,6 @@ export function useGetProjectCasesPage(
       offset >= 0 &&
       limit > 0,
     staleTime: 5 * 60 * 1000,
-    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });

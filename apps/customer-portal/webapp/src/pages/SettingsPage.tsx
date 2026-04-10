@@ -48,14 +48,7 @@ export default function SettingsPage(): JSX.Element {
     [userDetails?.roles],
   );
 
-  const tabs = useMemo(
-    () =>
-      SETTINGS_TABS.filter((t) => {
-        if (t.id === "ai" && !isCustomerAdmin) return false;
-        return true;
-      }),
-    [isCustomerAdmin],
-  );
+  const tabs = useMemo(() => SETTINGS_TABS, []);
 
   const displayTab = useMemo(
     () =>
@@ -92,7 +85,9 @@ export default function SettingsPage(): JSX.Element {
           canAddOrRemoveUsers={isCustomerAdmin}
         />
       )}
-      {displayTab === "ai" && <SettingsAiAssistant projectId={projectId} />}
+      {displayTab === "ai" && (
+        <SettingsAiAssistant projectId={projectId} canEdit={isCustomerAdmin} />
+      )}
       {displayTab === "registryTokens" && (
         <SettingsRegistryTokens
           projectId={projectId}
