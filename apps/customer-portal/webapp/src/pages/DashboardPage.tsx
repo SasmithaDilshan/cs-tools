@@ -23,6 +23,8 @@ import { useLoader } from "@context/linear-loader/LoaderContext";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
 import useInfiniteProjects, { flattenProjectPages } from "@api/useGetProjects";
 import useGetProjectDetails from "@api/useGetProjectDetails";
+import { isForbiddenError, getForbiddenMessage } from "@api/ApiError";
+import { Error403Page } from "@components/common/error";
 import { useGetProjectCasesStats } from "@api/useGetProjectCasesStats";
 import { useGetProjectChangeRequestsStats } from "@api/useGetProjectChangeRequestsStats";
 import {
@@ -58,14 +60,23 @@ export default function DashboardPage(): JSX.Element {
   const {
     data: projectsData,
     isLoading: isProjectsLoading,
+    error: projectsError,
   } = useInfiniteProjects({ pageSize: 20, enabled: !!projectId });
   const projects = useMemo(() => flattenProjectPages(projectsData), [projectsData]);
   const projectFromList = useMemo(
     () => projects.find((p) => p.id === projectId),
     [projects, projectId],
   );
-  const { data: projectDetails, isFetching: isProjectDetailsFetching } =
-    useGetProjectDetails(projectId || "");
+  const {
+    data: projectDetails,
+    isFetching: isProjectDetailsFetching,
+    error: projectDetailsError,
+  } = useGetProjectDetails(projectId || "");
+
+  const isForbidden =
+    isForbiddenError(projectsError) || isForbiddenError(projectDetailsError);
+  const forbiddenMessage =
+    getForbiddenMessage(projectsError) ?? getForbiddenMessage(projectDetailsError);
   const resolvedProject = projectFromList ?? projectDetails ?? undefined;
 
   const awaitingProjectContext =
@@ -137,12 +148,16 @@ export default function DashboardPage(): JSX.Element {
   const isDashboardLoading = isAuthLoading || awaitingProjectContext;
 
   useEffect(() => {
+    if (isForbidden) {
+      hideLoader();
+      return;
+    }
     if (isDashboardLoading) {
       showLoader();
       return () => hideLoader();
     }
     hideLoader();
-  }, [isDashboardLoading, showLoader, hideLoader]);
+  }, [isDashboardLoading, isForbidden, showLoader, hideLoader]);
 
   useEffect(() => {
     if (combinedCasesStats || defaultCaseStats) {
@@ -154,6 +169,7 @@ export default function DashboardPage(): JSX.Element {
   const hasShownErrorRef = useRef(false);
 
   useEffect(() => {
+    if (isForbidden) return;
     const srFailed = showOpsChart && isErrorServiceRequest;
     const crFailed = includeCrStats && isErrorChangeRequestStats;
     const allCoreFailed =
@@ -184,6 +200,7 @@ export default function DashboardPage(): JSX.Element {
     showError,
     logger,
     projectId,
+    isForbidden,
   ]);
 
   const outstandingCases = useMemo(() => {
@@ -314,6 +331,10 @@ export default function DashboardPage(): JSX.Element {
     isErrorChangeRequestStats,
     isErrorCombinedCases,
   ]);
+
+  if (isForbidden) {
+    return <Error403Page message={forbiddenMessage} />;
+  }
 
   return (
     <Box sx={{ width: "100%", pt: 0, position: "relative" }}>
