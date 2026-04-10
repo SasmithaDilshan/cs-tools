@@ -44,6 +44,7 @@ export interface ChatNavState {
   conversationResponse?: ConversationResponse;
   initialEnvProducts?: Record<string, string[]>;
   accountId?: string;
+  chatNumber?: string;
 }
 
 export interface ChatWebSocketEvent {
