@@ -36,7 +36,7 @@ import {
 import { useMemo, type JSX } from "react";
 import { useGetConversationMessages } from "@api/useGetConversationMessages";
 import type { ConversationMessage, ChatHistoryItem } from "@models/responses";
-import ErrorStateIcon from "@components/common/error-state/ErrorStateIcon";
+import Error500Page from "@components/common/error/Error500Page";
 import type { Message } from "@models/chatTypes";
 import ChatMessageBubble from "@components/support/novera-ai-assistant/novera-chat-page/ChatMessageBubble";
 import { alpha, useTheme } from "@wso2/oxygen-ui";
@@ -263,7 +263,7 @@ export default function ConversationDetailsPage(): JSX.Element {
           </Box>
         ) : isError ? (
           <Box sx={{ textAlign: "center", py: 6 }}>
-            <ErrorStateIcon width={180} height={120} />
+            <Error500Page width={180} height={120} />
             <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
               Could not load conversation messages.
             </Typography>
@@ -306,7 +306,7 @@ export default function ConversationDetailsPage(): JSX.Element {
           </Typography>
         </Stack>
         <Box sx={{ textAlign: "center", py: 4 }}>
-          <ErrorStateIcon width={160} height={110} />
+          <Error500Page width={160} height={110} />
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             KB article suggestions are not available yet.
           </Typography>
