@@ -18,13 +18,16 @@ import { type JSX } from "react";
 import ErrorPage from "./ErrorPage";
 import illustration from "@assets/error/error-404.svg";
 
-export default function Error404Page(): JSX.Element {
+interface Error404PageProps {
+  message?: string;
+}
+
+export default function Error404Page({ message }: Error404PageProps): JSX.Element {
   return (
     <ErrorPage
       illustration={illustration}
       illustrationAlt="404 not found illustration"
-      title="404 - Page not found"
-      description="The page you're looking for doesn't exist or has been moved."
+      description={message ?? "The page you're looking for doesn't exist or has been moved."}
     />
   );
 }
