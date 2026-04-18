@@ -1286,7 +1286,7 @@ service http:InterceptableService / on new http:Listener(9090, listenerConf) {
     #
     # + payload - Recommendation request payload
     # + return - Recommendation response or an error
-    resource function post recommendations/search(http:RequestContext ctx, ai_chat_agent:RecommendationRequest payload)
+    resource function post conversations/recommendations/search(http:RequestContext ctx, ai_chat_agent:RecommendationRequest payload)
         returns ai_chat_agent:RecommendationResponse|http:InternalServerError {
 
         authorization:UserInfoPayload|error userInfo = ctx.getWithType(authorization:HEADER_USER_INFO);
