@@ -497,6 +497,7 @@ export type ChatMessageListProps = {
   onFetchOlder?: () => void;
   isFetchingOlder?: boolean;
   onSolutionWorked?: () => void;
+  onRequestIncrease?: (messageId: string, reason: string, requestedLimit?: number) => void;
 };
 
 export type ChatMessageBubbleProps = {
@@ -505,4 +506,12 @@ export type ChatMessageBubbleProps = {
   onThumbsUp?: (messageId: string) => void;
   onThumbsDown?: (messageId: string) => void;
   onSolutionWorked?: () => void;
+  onRequestIncrease?: (messageId: string, reason: string, requestedLimit?: number) => void;
+};
+
+export type TokenLimitAlertCardProps = {
+  scope: "account" | "session";
+  message: string;
+  acknowledged: boolean;
+  onRequestIncrease: (reason: string, requestedLimit?: number) => void;
 };

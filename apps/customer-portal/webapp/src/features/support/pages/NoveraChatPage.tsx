@@ -49,6 +49,7 @@ import {
   CHAT_TYPING_INTERVAL_MS,
   NOVERA_ANALYZING_PLACEHOLDER_TEXT,
   NOVERA_INITIAL_WELCOME_TEXT,
+  TOKEN_WARNING_ACCOUNT_LIMIT_REACHED,
   TOKEN_WARNING_SESSION_LIMIT_REACHED,
 } from "@features/support/constants/chatConstants";
 import {
@@ -362,6 +363,7 @@ export default function NoveraChatPage(): JSX.Element {
     payload: Record<string, unknown>;
     finalMessage: string;
   } | null>(null);
+  const tokenLimitHandledRef = useRef(false);
   const TYPING_INTERVAL_MS = CHAT_TYPING_INTERVAL_MS;
   const TYPING_CHARS_PER_TICK = CHAT_TYPING_CHARS_PER_TICK;
 
@@ -433,7 +435,10 @@ export default function NoveraChatPage(): JSX.Element {
       if (actions.some((a) => a.type === NoveraActionType.SolutionWorked)) {
         setIsInputDisabled(true);
       }
-      if (pending?.payload?.token_warning === TOKEN_WARNING_SESSION_LIMIT_REACHED) {
+      if (
+        pending?.payload?.token_warning === TOKEN_WARNING_SESSION_LIMIT_REACHED ||
+        pending?.payload?.token_warning === TOKEN_WARNING_ACCOUNT_LIMIT_REACHED
+      ) {
         setIsTypingDisabled(true);
       }
     }
@@ -536,6 +541,10 @@ export default function NoveraChatPage(): JSX.Element {
           break;
         }
         case "final": {
+          if (tokenLimitHandledRef.current) {
+            tokenLimitHandledRef.current = false;
+            break;
+          }
           const payload = (event.payload ?? {}) as Record<string, unknown>;
           const finalMessage = getFinalMessageFromPayload(payload);
           const nextConversationId = String(payload.conversationId ?? "");
@@ -558,6 +567,55 @@ export default function NoveraChatPage(): JSX.Element {
               queryKey: [ApiQueryKeys.CONVERSATION_MESSAGES, activeConversationId, 10],
             });
           }
+          break;
+        }
+        case "token_limit": {
+          const scope = String(event.scope ?? "account") as "account" | "session";
+          const limitMessage = String(
+            event.message ??
+              (scope === "account"
+                ? "Monthly token limit reached. Please request an increase."
+                : "Daily session token limit reached. Please try again tomorrow."),
+          );
+          tokenLimitHandledRef.current = true;
+          pendingFinalRef.current = null;
+          tokenQueueRef.current = [];
+          // Convert the active loading bot message into the alert card.
+          upsertActiveBotMessage(
+            (msg) => ({
+              ...msg,
+              isLoading: false,
+              isStreaming: false,
+              thinkingSteps: [],
+              thinkingLabel: null,
+              isTokenLimitAlert: true,
+              tokenLimitScope: scope,
+              tokenLimitMessage: limitMessage,
+              tokenRequestAcknowledged: false,
+            }),
+            () => ({
+              id: `token-limit-${Date.now()}`,
+              text: limitMessage,
+              sender: ChatSender.BOT,
+              timestamp: new Date(),
+              isTokenLimitAlert: true,
+              tokenLimitScope: scope,
+              tokenLimitMessage: limitMessage,
+              tokenRequestAcknowledged: false,
+            }),
+          );
+          setIsSending(false);
+          setIsTypingDisabled(true);
+          break;
+        }
+        case "token_request_ack": {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.isTokenLimitAlert && !m.tokenRequestAcknowledged
+                ? { ...m, tokenRequestAcknowledged: true }
+                : m,
+            ),
+          );
           break;
         }
         case "error":
@@ -609,6 +667,7 @@ export default function NoveraChatPage(): JSX.Element {
       activeBotMessageIdRef.current = botMessageId;
       pendingFinalRef.current = null;
       tokenQueueRef.current = [];
+      tokenLimitHandledRef.current = false;
 
       setMessages((prev) => [
         ...prev,
@@ -672,6 +731,26 @@ export default function NoveraChatPage(): JSX.Element {
     void sendViaWebSocket("This Resolved My Issue");
   }, [isSending, sendViaWebSocket]);
 
+  const handleRequestIncrease = useCallback(
+    async (messageId: string, reason: string, requestedLimit?: number) => {
+      if (!accountId) return;
+      const scope = messages.find((m) => m.id === messageId)?.tokenLimitScope ?? "account";
+      try {
+        await connect(projectId ?? "");
+        await sendUserMessage({
+          type: "token_increase_request",
+          accountId,
+          reason,
+          limitType: scope === "session" ? "session" : "monthly",
+          ...(requestedLimit !== undefined && { requestedLimit }),
+        });
+      } catch {
+        // Silently ignore — the ack handler updates the card on success
+      }
+    },
+    [accountId, connect, messages, projectId, sendUserMessage],
+  );
+
   const handleSendMessage = useCallback(async (): Promise<boolean> => {
     const text = htmlToPlainText(inputValueRef.current).trim();
     if (!text || isSending || !projectId) return false;
@@ -730,6 +809,7 @@ export default function NoveraChatPage(): JSX.Element {
               messagesEndRef={messagesEndRef}
               onCreateCase={handleCreateCase}
               onSolutionWorked={handleSolutionWorked}
+              onRequestIncrease={handleRequestIncrease}
               onFetchOlder={
                 urlConversationId && hasNextPage && !isFetchingNextPage
                   ? () => fetchNextPage()

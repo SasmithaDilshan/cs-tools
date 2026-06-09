@@ -37,6 +37,7 @@ export default function ChatMessageList({
   onFetchOlder,
   isFetchingOlder = false,
   onSolutionWorked,
+  onRequestIncrease,
 }: ChatMessageListProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pendingPrependRef = useRef(false);
@@ -93,6 +94,8 @@ export default function ChatMessageList({
             onThumbsUp={onThumbsUp}
             onThumbsDown={onThumbsDown}
             onSolutionWorked={onSolutionWorked}
+            onRequestIncrease={onRequestIncrease}
+
           />
         ),
       )}

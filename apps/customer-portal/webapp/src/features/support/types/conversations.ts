@@ -218,6 +218,10 @@ export type Message = {
   thinkingLabel?: string | null;
   isStreaming?: boolean;
   actions?: NoveraAction[];
+  isTokenLimitAlert?: boolean;
+  tokenLimitScope?: "account" | "session";
+  tokenLimitMessage?: string;
+  tokenRequestAcknowledged?: boolean;
 };
 
 // Model type for chat navigation state.
@@ -237,13 +241,26 @@ export type ChatWebSocketEvent = {
 };
 
 // Request type for chat WebSocket user message payload.
-export type ChatWebSocketPayload = {
+export type ChatWebSocketUserMessagePayload = {
   type: "user_message";
   accountId: string;
   conversationId: string;
   message: string;
   envProducts: Record<string, string[]>;
 };
+
+// Request type for token increase request WebSocket payload.
+export type TokenIncreaseRequestPayload = {
+  type: "token_increase_request";
+  accountId: string;
+  reason: string;
+  limitType: "monthly" | "session";
+  requestedLimit?: number;
+};
+
+export type ChatWebSocketPayload =
+  | ChatWebSocketUserMessagePayload
+  | TokenIncreaseRequestPayload;
 
 // Model type for chat WebSocket hook options.
 export type UseChatWebSocketOptions = {

@@ -34,6 +34,7 @@ import {
   NOVERA_DISPLAY_NAME,
 } from "@features/support/constants/chatConstants";
 import RecommendationsCard from "@features/support/components/novera-ai-assistant/novera-chat-page/RecommendationsCard";
+import TokenLimitAlertCard from "@features/support/components/novera-ai-assistant/novera-chat-page/TokenLimitAlertCard";
 import { resolveDisplayTimeZone } from "@utils/dateTime";
 import { buildBotMarkdownComponents, TextWithLinks } from "@features/support/utils/markdown";
 
@@ -138,6 +139,7 @@ function MarkdownContent({ text }: { text: string }) {
  */
 export default function ChatMessageBubble({
   message,
+  onRequestIncrease,
 }: ChatMessageBubbleProps): JSX.Element {
   const isUser = message.sender === ChatSender.USER;
   const isCurrentUserMessage = isUser && (message.isCurrentUser ?? true);
@@ -397,6 +399,18 @@ export default function ChatMessageBubble({
           </Box>
         </Stack>
       </Stack>
+
+      {/* Token limit alert - shown instead of normal message content */}
+      {message.isTokenLimitAlert && message.tokenLimitScope && (
+        <Box sx={{ ml: "48px", mt: 1 }}>
+          <TokenLimitAlertCard
+            scope={message.tokenLimitScope}
+            message={message.tokenLimitMessage ?? message.text}
+            acknowledged={message.tokenRequestAcknowledged ?? false}
+            onRequestIncrease={(reason, requestedLimit) => onRequestIncrease?.(message.id, reason, requestedLimit)}
+          />
+        </Box>
+      )}
 
       {/* Recommendations - shown after message content */}
       {message.recommendations && message.recommendations.length > 0 && (
