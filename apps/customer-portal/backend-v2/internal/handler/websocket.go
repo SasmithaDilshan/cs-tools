@@ -67,7 +67,7 @@ const wsSubprotocol = "cs-customer-portal"
 // userIDTokenHeader carries the caller's user-ID token on ordinary HTTP
 // requests. A browser cannot set it on a WebSocket handshake — see
 // userIDTokenFromRequest.
-const userIDTokenHeader = "x-user-id-token"
+const userIDTokenHeader = "x-user-id-token" // #nosec G101 -- HTTP header name, not a credential
 
 // wsTokenValidator abstracts middleware.TokenValidator so tests can inject a
 // fake identity without minting real JWTs.
