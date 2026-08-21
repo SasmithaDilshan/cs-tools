@@ -3338,6 +3338,48 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /conversations/stats/search:
+    post:
+      summary: Conversation counts grouped by state (ServiceNow data source only).
+      description: >-
+        Returns how many of the matching conversations are in each state, so a
+        caller can compute outcome rates without paging the conversations
+        themselves or issuing one request per project. Accepts the same filters
+        as /conversations/search except states, which is absent because the
+        response is grouped by state.
+      operationId: searchConversationStats
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchConversationStatsRequest'
+      responses:
+        "200":
+          description: Conversation counts grouped by state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchConversationStatsResponse'
+        "400":
+          description: Bad request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /conversations/search:
     post:
       summary: Search conversations (ServiceNow data source only).
@@ -9423,6 +9465,51 @@ components:
           nullable: true
           $ref: '#/components/schemas/UserReference'
 
+    SearchConversationStatsRequest:
+      type: object
+      properties:
+        filters:
+          $ref: '#/components/schemas/SearchConversationStatsFilters'
+    SearchConversationStatsFilters:
+      type: object
+      properties:
+        projectIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        searchQuery:
+          type: string
+        number:
+          type: string
+        createdByMe:
+          type: boolean
+        createdBy:
+          type: array
+          items:
+            type: string
+    ConversationStateCount:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [ACTIVE, RESOLVED, CONVERTED, ABANDONED, CLOSED]
+        count:
+          type: integer
+    SearchConversationStatsResponse:
+      type: object
+      properties:
+        totalCount:
+          type: integer
+        stateCounts:
+          type: array
+          description: >-
+            One entry per state, including states with a count of zero. A state
+            absent from the list and a state with no conversations are different
+            claims, and a caller computing a rate needs the zero rows to build a
+            denominator it can trust.
+          items:
+            $ref: '#/components/schemas/ConversationStateCount'
     SearchConversationsResponse:
       type: object
       properties:

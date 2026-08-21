@@ -387,6 +387,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) http.Handler {
 
 	if conversationHandler != nil {
 		mux.HandleFunc("POST /conversations/search", conversationHandler.SearchConversations)
+		mux.HandleFunc("POST /conversations/stats/search", conversationHandler.SearchConversationStats)
 	}
 
 	return middleware.CorrelationID(

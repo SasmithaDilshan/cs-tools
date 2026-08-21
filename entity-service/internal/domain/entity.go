@@ -2495,7 +2495,7 @@ type ProjectContact struct {
 	// than treating it as an error. A pointer keeps "no id" distinguishable from an
 	// empty id internally; on the wire both a nil and an absent id are omitted, so the
 	// published shape is unchanged.
-	ID                   *string  `json:"id,omitempty"`
+	ID *string `json:"id,omitempty"`
 	// Name is nil when the row has no contact record linked -- the name is only ever
 	// known from that record.
 	Name *string `json:"name"`
@@ -4052,4 +4052,42 @@ type SearchConversationsResponse struct {
 	Total         int                      `json:"total"`
 	Offset        int                      `json:"offset"`
 	Limit         int                      `json:"limit"`
+}
+
+// SearchConversationStatsFilters narrows which conversations are counted by
+// POST /conversations/stats/search. Deliberately mirrors SearchConversationsFilters
+// minus States, so a caller can reuse the same filter object it already builds for
+// the search endpoint. States is absent because the response is grouped by state —
+// filtering by it would only ever zero the other rows.
+type SearchConversationStatsFilters struct {
+	ProjectIDs  []string `json:"projectIds"`
+	SearchQuery string   `json:"searchQuery"`
+	Number      *string  `json:"number,omitempty"`
+	CreatedByMe bool     `json:"createdByMe"`
+	CreatedBy   []string `json:"createdBy"`
+}
+
+// SearchConversationStatsRequest is the input for POST /conversations/stats/search.
+// There is no pagination: the response is one row per state, and the set of states
+// is fixed and small.
+type SearchConversationStatsRequest struct {
+	Filters SearchConversationStatsFilters `json:"filters"`
+}
+
+// ConversationStateCount is the number of matching conversations in one state.
+type ConversationStateCount struct {
+	State ConversationState `json:"state"`
+	Count int               `json:"count"`
+}
+
+// SearchConversationStatsResponse is the outcome breakdown for the matched
+// conversations.
+//
+// StateCounts always carries one entry per known state, zeros included. A state
+// missing from the list and a state with no conversations are different claims,
+// and a caller computing a deflection or abandonment rate needs the zero rows to
+// build a denominator it can trust.
+type SearchConversationStatsResponse struct {
+	TotalCount  int                      `json:"totalCount"`
+	StateCounts []ConversationStateCount `json:"stateCounts"`
 }

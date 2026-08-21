@@ -34,6 +34,22 @@ func NewConversationHandler(svc service.ConversationService) *ConversationHandle
 	return &ConversationHandler{svc: svc}
 }
 
+// SearchConversationStats handles POST /conversations/stats/search.
+func (h *ConversationHandler) SearchConversationStats(w http.ResponseWriter, r *http.Request) {
+	var req domain.SearchConversationStatsRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	resp, err := h.svc.SearchConversationStats(r.Context(), req)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // SearchConversations handles POST /conversations/search.
 func (h *ConversationHandler) SearchConversations(w http.ResponseWriter, r *http.Request) {
 	var req domain.SearchConversationsRequest

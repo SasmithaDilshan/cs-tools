@@ -27,6 +27,8 @@ import (
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/middleware"
 	integrationservice "github.com/wso2-open-operations/cs-tools/entity-service/internal/servicenow-integration-service"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // snConversationsResponse mirrors the Choreo POST /conversations/search response.
@@ -146,6 +148,13 @@ const (
 	maxConversationCreatedByEntries  = 20
 	maxConversationCreatedByEntryLen = 254
 )
+
+// conversationStatsProbeLimit is the page size used by SearchConversationStats.
+// Only the upstream's total is wanted, never the rows, so this asks for the
+// smallest page the search accepts. It must stay >= 1: normalizeConversationPagination
+// replaces a non-positive limit with the default page size, which would fetch and
+// discard 20 conversations per state for no reason.
+const conversationStatsProbeLimit = 1
 
 // validateConversationCreatedBy checks an optional initiator-email filter list.
 func validateConversationCreatedBy(emails []string) error {
@@ -280,5 +289,87 @@ func (s *snConversationService) SearchConversations(ctx context.Context, req dom
 		Total:         snResp.TotalRecords,
 		Limit:         req.Pagination.Limit,
 		Offset:        req.Pagination.Offset,
+	}, nil
+}
+
+// conversationStatsOrder fixes the order of the state rows in the response.
+// A stable order lets a caller diff two responses positionally and keeps the
+// output readable; ranging over snConversationStateKeyMap would not, since Go
+// randomises map iteration.
+var conversationStatsOrder = []domain.ConversationState{
+	domain.ConversationStateActive,
+	domain.ConversationStateResolved,
+	domain.ConversationStateConverted,
+	domain.ConversationStateAbandoned,
+	domain.ConversationStateClosed,
+}
+
+// SearchConversationStats implements ConversationService.
+//
+// Counts come from the upstream search's totalRecords, requested one state at a
+// time with the smallest page the API allows. The rows themselves are discarded —
+// only the count is wanted — so the page size is a floor, not a sample: a state
+// with 4,000 conversations still reports 4,000.
+//
+// The alternative was paging every conversation and tallying client-side, which
+// costs one request per page per project and grows without bound. This is a fixed
+// five requests regardless of how many conversations or projects are involved.
+func (s *snConversationService) SearchConversationStats(
+	ctx context.Context, req domain.SearchConversationStatsRequest,
+) (domain.SearchConversationStatsResponse, error) {
+	if err := validateSearchQuery(req.Filters.SearchQuery); err != nil {
+		return domain.SearchConversationStatsResponse{}, err
+	}
+	if err := validateExactNumber("number", req.Filters.Number); err != nil {
+		return domain.SearchConversationStatsResponse{}, err
+	}
+	if err := validateConversationCreatedBy(req.Filters.CreatedBy); err != nil {
+		return domain.SearchConversationStatsResponse{}, err
+	}
+	if err := validateUUIDs("projectIds", req.Filters.ProjectIDs); err != nil {
+		return domain.SearchConversationStatsResponse{}, err
+	}
+
+	counts := make([]int, len(conversationStatsOrder))
+
+	// errgroup's derived context cancels the siblings as soon as one state fails,
+	// so a partial tally is never assembled. A caller cannot tell a partial count
+	// from a real one, and a wrong deflection rate is worse than an error.
+	g, gCtx := errgroup.WithContext(ctx)
+	for i, state := range conversationStatsOrder {
+		g.Go(func() error {
+			searchReq := domain.SearchConversationsRequest{
+				Filters: domain.SearchConversationsFilters{
+					ProjectIDs:  req.Filters.ProjectIDs,
+					States:      []domain.ConversationState{state},
+					SearchQuery: req.Filters.SearchQuery,
+					Number:      req.Filters.Number,
+					CreatedByMe: req.Filters.CreatedByMe,
+					CreatedBy:   req.Filters.CreatedBy,
+				},
+				Pagination: domain.Pagination{Limit: conversationStatsProbeLimit, Offset: 0},
+			}
+			resp, err := s.SearchConversations(gCtx, searchReq)
+			if err != nil {
+				return fmt.Errorf("conversation stats: state %s: %w", state, err)
+			}
+			counts[i] = resp.Total
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return domain.SearchConversationStatsResponse{}, err
+	}
+
+	stateCounts := make([]domain.ConversationStateCount, 0, len(conversationStatsOrder))
+	total := 0
+	for i, state := range conversationStatsOrder {
+		stateCounts = append(stateCounts, domain.ConversationStateCount{State: state, Count: counts[i]})
+		total += counts[i]
+	}
+
+	return domain.SearchConversationStatsResponse{
+		TotalCount:  total,
+		StateCounts: stateCounts,
 	}, nil
 }

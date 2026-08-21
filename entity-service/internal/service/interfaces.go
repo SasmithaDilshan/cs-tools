@@ -489,4 +489,11 @@ type ConversationService interface {
 	// project IDs, states, search query, and createdByMe. A ValidationError is returned
 	// for invalid input.
 	SearchConversations(ctx context.Context, req domain.SearchConversationsRequest) (domain.SearchConversationsResponse, error)
+
+	// SearchConversationStats returns conversation counts grouped by state for the
+	// conversations matching the filters. Answers "how many resolved / converted /
+	// abandoned" in one call, without the caller paging the conversations themselves
+	// or fanning out one request per project. A ValidationError is returned for
+	// invalid input.
+	SearchConversationStats(ctx context.Context, req domain.SearchConversationStatsRequest) (domain.SearchConversationStatsResponse, error)
 }
