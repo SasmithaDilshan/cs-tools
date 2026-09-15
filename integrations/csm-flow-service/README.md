@@ -12,6 +12,36 @@ Go code.
 > [`docs/flow-porting-specs.md`](docs/flow-porting-specs.md) for each flow's
 > real trigger, condition and actions.
 
+## Testing a flow against a real Event Hub
+
+`cmd/replay` runs flows in-process with no broker; `cmd/publish` is its producing
+counterpart, putting one crafted event onto the real topic. Neither is deployed.
+
+```bash
+# 1. register the flow locally — All() is empty by design, so nothing matches until you do
+#    (do NOT commit this: TestCRApprovalNotice_NotRegistered fails if you do)
+
+# 2. put an event on the topic
+EVENT_HUB_BROKER=… EVENT_HUB_CONNECTION_STRING=… EVENT_HUB_TOPIC=… \
+  go run ./cmd/publish cmd/replay/testdata/cr_approval_assess.json
+
+# 3. in another shell, consume it
+EVENT_HUB_CONSUMER_GROUP=dev-<your-name> \
+EMAIL_DEBUG_RECIPIENTS=you@wso2.com \
+  go run ./cmd/consumer
+```
+
+**Use a non-production namespace.** Publishing writes a real record that every
+consumer group on that topic sees.
+
+**Give yourself your own `EVENT_HUB_CONSUMER_GROUP`.** Sharing one with a deployed
+service means you and it compete for partitions, and each record reaches only one
+of you.
+
+**Set `EMAIL_DEBUG_RECIPIENTS`** so anything a flow requests goes to you rather
+than a real approval group or customer contact.
+
+
 ## Why this shape
 
 ServiceNow is being switched off. This service is the **pragmatic hand-port**

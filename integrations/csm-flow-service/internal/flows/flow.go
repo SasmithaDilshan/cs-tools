@@ -39,17 +39,43 @@ import (
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
 )
 
+// EntityReader is the slice of entity-service a flow reads through. It starts
+// at the two recipient lookups the first ported flow needs and grows with each
+// port — never a speculative mirror of the whole entity API.
+type EntityReader interface {
+	// GroupMemberEmails returns the addresses of everyone in a named WSO2
+	// group, e.g. "CAB Approval".
+	GroupMemberEmails(ctx context.Context, groupName string) ([]string, error)
+	// ProjectContactEmails returns a customer project's contact addresses.
+	ProjectContactEmails(ctx context.Context, projectID string) ([]string, error)
+}
+
+// EventPublisher is the bus write a flow makes: one record, keyed so every
+// event about the same entity stays ordered on one partition.
+type EventPublisher interface {
+	Publish(ctx context.Context, key, value []byte) error
+}
+
 // Deps are the shared clients a flow may use. A flow uses only what it needs;
 // any of these may be nil in a deployment that hasn't configured it, so a flow
 // that dereferences one is responsible for the entity being configured (or for
 // letting the call fail cleanly).
 type Deps struct {
-	// Entity is the entity-service client — reads and (for native entities)
-	// writes cases and related records.
-	Entity *entity.Client
+	// Entity reads from entity-service — the recipient audiences a flow
+	// resolves, and (for native entities) the records it writes.
+	//
+	// An interface, not *entity.Client, so a flow's Run is testable with a
+	// fake: Run is where a port's real behaviour lives, and a concrete client
+	// here would leave it exercisable only against a deployed service. Same
+	// consumer-defined-narrow-interface shape the scheduled-tasks sub-crons
+	// use (CaseSearcher, EmailSender). *entity.Client satisfies it; extend the
+	// interface as each ported flow needs more, exactly as that client itself
+	// grows.
+	Entity EntityReader
 	// Producer publishes back onto the bus: a notification-request event that
 	// csm-notification-service sends, or (later) timer.fired from the sweeper.
-	Producer *eventbus.Producer
+	// An interface for the same reason as Entity; *eventbus.Producer satisfies it.
+	Producer EventPublisher
 	// EmailDebugRecipients, when non-empty, replaces the real audience of every
 	// notification a flow requests — approval groups, project contacts,
 	// watchers — so a dev or staging deployment can be exercised without mail
@@ -88,3 +114,12 @@ type Flow interface {
 	Match(evt Event) bool
 	Run(ctx context.Context, evt Event, deps Deps) error
 }
+
+// The production clients satisfy the interfaces above. These assertions are the
+// guard that narrowing Deps for testability did not quietly fork the contract:
+// add a method to EntityReader without adding it to *entity.Client and this
+// stops compiling.
+var (
+	_ EntityReader   = (*entity.Client)(nil)
+	_ EventPublisher = (*eventbus.Producer)(nil)
+)
