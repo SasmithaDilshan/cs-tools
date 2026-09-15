@@ -30,6 +30,7 @@ package flows
 func Catalogue() []Flow {
 	return []Flow{
 		crApprovalNotice{},
+		crPlanDateNotice{},
 	}
 }
 

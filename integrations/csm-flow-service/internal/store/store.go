@@ -140,7 +140,18 @@ func (s *Store) ChangeRequestDetails(ctx context.Context, id string) (flows.Chan
 		           ''
 		       ),
 		       COALESCE(wi.project_id::text, ''),
-		       COALESCE(p.name, '')
+		       COALESCE(p.name, ''),
+		       COALESCE(wi.subject, ''),
+		       COALESCE(wi.description, ''),
+		       -- Last name first: the ServiceNow templates interpolate the two
+		       -- name pills in that order, and a port that quietly reorders them
+		       -- is a port that reads differently from the mail it replaces.
+		       COALESCE(
+		           NULLIF(TRIM(COALESCE(a.last_name, '') || ' ' || COALESCE(a.first_name, '')), ''),
+		           NULLIF(TRIM(COALESCE(a.name, '')), ''),
+		           ''
+		       ),
+		       lower(COALESCE(a.email, wi.updated_by, '')) LIKE '%@wso2.com' 
 		FROM change_request cr
 		JOIN work_item wi   ON wi.id = cr.id
 		-- requested_by_user_id, not work_item.opened_by_user_id: the change
@@ -149,11 +160,17 @@ func (s *Store) ChangeRequestDetails(ctx context.Context, id string) (flows.Chan
 		-- is whoever created the record, frequently the sync itself.
 		LEFT JOIN "user" u  ON u.id = cr.requested_by_user_id
 		LEFT JOIN project p ON p.id = wi.project_id
+		-- The actor: whoever last wrote the row. work_item.updated_by is a
+		-- username string, not a reference, so this matches on either of the
+		-- two things it is ever set to.
+		LEFT JOIN "user" a  ON lower(a.user_name) = lower(wi.updated_by)
+		                    OR lower(a.email)     = lower(wi.updated_by)
 		WHERE cr.id = $1::uuid`
 
 	var d flows.ChangeRequestDetails
 	err := s.db.QueryRow(ctx, query, id).Scan(
 		&d.Number, &d.GitReference, &d.RequesterName, &d.ProjectID, &d.ProjectName,
+		&d.ShortDescription, &d.Description, &d.ActorName, &d.ActorIsWSO2,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return flows.ChangeRequestDetails{}, nil

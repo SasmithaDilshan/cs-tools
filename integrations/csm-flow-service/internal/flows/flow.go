@@ -80,6 +80,19 @@ type ChangeRequestDetails struct {
 	ProjectID string
 	// ProjectName is shown in the email body.
 	ProjectName string
+	// ShortDescription is work_item.subject -- ServiceNow's "Short
+	// description", shown as the second body line of a plan-date notice.
+	ShortDescription string
+	// Description is the change request's full description, shown beneath it.
+	Description string
+	// ActorName is whoever last changed the record, rendered LAST NAME FIRST
+	// because the ServiceNow templates interpolate the two pills in that order.
+	ActorName string
+	// ActorIsWSO2 reports whether that person has a wso2.com address. The
+	// internal plan-date notice fires only when a CUSTOMER moved the date --
+	// the original's trigger says sys_updated_byNOT LIKE@wso2.com -- so the
+	// port needs the same distinction.
+	ActorIsWSO2 bool
 }
 
 // ChangeRequests reads a change request's surrounding detail. Same reasoning as

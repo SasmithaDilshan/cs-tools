@@ -185,6 +185,47 @@ const (
 	CRAudienceInternal CRApprovalAudience = "internal"
 )
 
+// TypeCRPlanDateNotice is published by csm-flow-service's cr_plan_date_notice
+// flow: the plan-start-date conversation between WSO2 and a customer. One type
+// rather than three, because the three notices differ only in wording and
+// audience -- Kind says which.
+const TypeCRPlanDateNotice Type = "change_request.plan_date_notice"
+
+// CRPlanDateKind is which turn of the conversation a notice reports.
+type CRPlanDateKind string
+
+const (
+	// CRPlanDateCustomerProposed: the customer moved the proposed start date.
+	// Internal audience.
+	CRPlanDateCustomerProposed CRPlanDateKind = "customer_proposed"
+	// CRPlanDateAccepted / CRPlanDateRejected: WSO2 answered. Customer audience.
+	CRPlanDateAccepted CRPlanDateKind = "accepted"
+	CRPlanDateRejected CRPlanDateKind = "rejected"
+)
+
+// CRPlanDateNoticePayload is TypeCRPlanDateNotice's payload.
+type CRPlanDateNoticePayload struct {
+	ChangeRequestID string `json:"changeRequestId"`
+	Number          string `json:"number"`
+	// Kind selects the body wording; Audience selects the portal to link to.
+	Kind     CRPlanDateKind     `json:"kind"`
+	Audience CRApprovalAudience `json:"audience"`
+	// GroupName is the approval group resolved for an internal notice, empty
+	// for a customer one.
+	GroupName string `json:"groupName,omitempty"`
+	// ActorName is whoever changed the date, rendered LAST NAME FIRST because
+	// that is the order the ServiceNow templates interpolate the two pills in.
+	ActorName        string `json:"actorName,omitempty"`
+	ProjectID        string `json:"projectId,omitempty"`
+	ProjectName      string `json:"projectName,omitempty"`
+	ShortDescription string `json:"shortDescription,omitempty"`
+	Description      string `json:"description,omitempty"`
+	// Subject is rendered by the flow, verbatim from the original.
+	Subject string `json:"subject"`
+	// Recipients are already resolved and de-duplicated. Never empty.
+	Recipients []string `json:"recipients"`
+}
+
 // CRApprovalRequestedPayload is TypeCRApprovalRequested's payload.
 type CRApprovalRequestedPayload struct {
 	ChangeRequestID string `json:"changeRequestId"`
