@@ -1,0 +1,167 @@
+// Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+//
+// WSO2 LLC. licenses this file to you under the Apache License,
+// Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+// Command consumer is the flow engine's event consumer: it joins the shared
+// event bus, routes each record to the flows that match it (internal/flows),
+// and runs them. It is the pragmatic-hand-port equivalent of the design's
+// cmd/engine (docs/architecture.md §18) — the durable timer sweeper and admin
+// API are separate lifecycles added later.
+//
+// A small HTTP server runs alongside for /health, so Choreo (and any probe)
+// can see the process is up; it carries no business endpoints.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/config"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/entity"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/flows"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/middleware"
+)
+
+// shutdownGracePeriod bounds the HTTP server's graceful shutdown. The
+// consumer's own graceful close (kafka-go's Close) can itself take ~30s during
+// a rebalance, so Choreo's termination grace period must exceed that — see
+// docs/architecture.md §17.1.
+const shutdownGracePeriod = 10 * time.Second
+
+func main() {
+	middleware.ConfigureLogger()
+
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("startup: configuration error", "err", err)
+		os.Exit(1)
+	}
+
+	// Root context canceled on SIGINT/SIGTERM — cancels the consumer loop.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	busCfg := eventbus.Config{
+		Broker:           cfg.EventHubBroker,
+		ConnectionString: cfg.EventHubConnectionString,
+		Topic:            cfg.EventHubTopic,
+	}
+
+	// entity-service client: safe to construct even when unconfigured (calls
+	// fail lazily). Only passed to flows that need it.
+	entityClient := entity.NewClient(entity.Config{
+		BaseURL:      cfg.EntityBaseURL,
+		TokenURL:     cfg.OAuthTokenURL,
+		ClientID:     cfg.OAuthClientID,
+		ClientSecret: cfg.OAuthSecret,
+		Scopes:       cfg.EntityScopes,
+	})
+
+	// Producer flows use to publish back onto the main topic — a notification
+	// request csm-notification-service sends, or (later) timer.fired.
+	flowProducer := eventbus.NewProducer(busCfg)
+	defer flowProducer.Close()
+
+	// Optional dead-letter producer. When no DLQ topic is configured, a record
+	// that exhausts its retries is logged and dropped (onExhausted stays nil).
+	var dlqProducer *eventbus.Producer
+	var onExhausted eventbus.OnExhausted
+	if cfg.DLQTopic != "" {
+		dlqCfg := busCfg
+		dlqCfg.Topic = cfg.DLQTopic
+		dlqProducer = eventbus.NewProducer(dlqCfg)
+		defer dlqProducer.Close()
+		onExhausted = func(ctx context.Context, rec eventbus.Record, handleErr error) error {
+			slog.ErrorContext(ctx, "consumer: dead-lettering record after exhausted retries",
+				"partition", rec.Partition, "offset", rec.Offset, "topic", rec.Topic, "handleErr", handleErr)
+			return dlqProducer.Publish(ctx, rec.Key, rec.Value)
+		}
+	}
+
+	registry := flows.NewRegistry(
+		flows.Deps{Entity: entityClient, Producer: flowProducer},
+		flows.All()...,
+	)
+
+	// Wrap each record's handling in a fresh correlation ID so consumed-record
+	// logs are traceable end to end, the same way HTTP requests are.
+	handle := func(ctx context.Context, rec eventbus.Record) error {
+		ctx = middleware.WithCorrelationID(ctx, middleware.NewCorrelationID())
+		return registry.Handle(ctx, rec)
+	}
+
+	consumer := eventbus.NewConsumer(busCfg, cfg.ConsumerGroup)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		slog.Info("consumer: starting",
+			"topic", cfg.EventHubTopic, "group", cfg.ConsumerGroup,
+			"dlq", cfg.DLQTopic, "registeredFlows", len(registry.Flows()))
+		consumer.Run(ctx, handle, onExhausted)
+	}()
+
+	srv := healthServer(cfg.Port, registry)
+	go func() {
+		slog.Info("health server: listening", "port", cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("health server: failed", "err", err)
+			stop() // treat a health-server failure as a shutdown trigger
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("shutdown: signal received, draining")
+
+	// Stop the consumer first (leaves the group cleanly), then the HTTP server.
+	consumer.Close()
+	<-done
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGracePeriod)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("shutdown: health server did not stop cleanly", "err", err)
+	}
+	slog.Info("shutdown: complete")
+}
+
+// healthServer builds the minimal HTTP server: the standard middleware chain
+// plus a /health endpoint reporting the registered flow count.
+func healthServer(port string, registry *flows.Registry) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":          "ok",
+			"registeredFlows": len(registry.Flows()),
+		})
+	})
+
+	handler := middleware.CorrelationID(middleware.Logger(middleware.SecurityHeaders(mux)))
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+}
