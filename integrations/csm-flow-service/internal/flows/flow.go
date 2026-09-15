@@ -33,6 +33,7 @@ package flows
 
 import (
 	"context"
+	"sort"
 
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
@@ -119,3 +120,41 @@ type Flow interface {
 // here would make this package import the store, which it has no other reason
 // to know about.
 var _ EventPublisher = (*eventbus.Producer)(nil)
+
+// EntityTriggered is implemented by a flow whose trigger is a row change
+// rather than a bus event. Optional: a flow that only reacts to typed bus
+// events (case.created and friends) does not implement it and is simply not
+// counted when the drainer decides what to poll for.
+//
+// Declaring it on the flow, rather than configuring it in main, keeps the
+// trigger source next to the Match that depends on it — registering a flow
+// cannot then silently fail to drain the table it needs.
+type EntityTriggered interface {
+	// TriggerEntityTypes are the entity_type values in event_outbox this flow
+	// can match, e.g. "change_request".
+	TriggerEntityTypes() []string
+}
+
+// TriggerEntityTypes is the union of every registered flow's trigger entity
+// types, deduplicated and ordered so the drainer's query plan and its logs are
+// stable between restarts. Empty when no registered flow is row-triggered, in
+// which case the drainer has nothing to poll for.
+func TriggerEntityTypes(fs []Flow) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range fs {
+		t, ok := f.(EntityTriggered)
+		if !ok {
+			continue
+		}
+		for _, et := range t.TriggerEntityTypes() {
+			if et == "" || seen[et] {
+				continue
+			}
+			seen[et] = true
+			out = append(out, et)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

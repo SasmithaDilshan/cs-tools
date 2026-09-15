@@ -41,6 +41,7 @@ import (
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/flows"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/middleware"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/outbox"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/store"
 )
 
@@ -122,6 +123,24 @@ func main() {
 		return registry.Handle(ctx, rec)
 	}
 
+	// Drain committed row changes into the same registry the bus feeds. This is
+	// what makes a record-triggered port fire: the ServiceNow original reacts to
+	// "Change Request Updated", and the native equivalent is a row changing
+	// here. Runs alongside the bus consumer, not instead of it -- a flow may
+	// react to either source.
+	drainer := &outbox.Drainer{
+		Claimer:     csmStore,
+		Dispatcher:  registry,
+		EntityTypes: flows.TriggerEntityTypes(registry.Flows()),
+		Interval:    cfg.OutboxInterval,
+	}
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		slog.Info("outbox: draining", "entityTypes", drainer.EntityTypes, "interval", drainer.Interval)
+		drainer.Run(ctx)
+	}()
+
 	consumer := eventbus.NewConsumer(busCfg, cfg.ConsumerGroup)
 
 	done := make(chan struct{})
@@ -148,6 +167,7 @@ func main() {
 	// Stop the consumer first (leaves the group cleanly), then the HTTP server.
 	consumer.Close()
 	<-done
+	<-drainDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGracePeriod)
 	defer cancel()

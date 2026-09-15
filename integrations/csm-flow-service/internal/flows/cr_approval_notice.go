@@ -63,6 +63,13 @@ type crApprovalNotice struct{}
 
 func (crApprovalNotice) Key() string { return "cr_approval_notice" }
 
+// TriggerEntityTypes marks this flow as row-triggered: it fires on a
+// change_request row changing, which is what the ServiceNow original's
+// "Change Request Updated" trigger meant. Declared here rather than configured
+// in main so registering the flow cannot silently fail to drain the one table
+// it depends on.
+func (crApprovalNotice) TriggerEntityTypes() []string { return []string{crEntityType} }
+
 // crApprovalStates maps the change-request states this flow reacts to onto the
 // subject-line wording and audience its branch used. A state absent from this
 // map is not an approval transition and the flow ignores it — which is the

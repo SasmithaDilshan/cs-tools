@@ -28,6 +28,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Defaults.
@@ -78,6 +79,11 @@ type Config struct {
 	// them and the audiences they notify. Required — see cmd/consumer.
 	DatabaseURL string
 
+	// OutboxInterval is how often to poll event_outbox when the last drain came
+	// back empty. A backlog drains at full speed regardless — this only governs
+	// the idle case, so it trades notification latency against query volume.
+	OutboxInterval time.Duration
+
 	// HTTP health/metrics server.
 	Port string
 }
@@ -106,7 +112,8 @@ func Load() (Config, error) {
 		OAuthSecret:   strings.TrimSpace(os.Getenv("OAUTH2_CLIENT_SECRET")),
 		OAuthTokenURL: strings.TrimSpace(os.Getenv("OAUTH2_TOKEN_URL")),
 
-		DatabaseURL: must("DATABASE_URL"),
+		DatabaseURL:    must("DATABASE_URL"),
+		OutboxInterval: envDuration("OUTBOX_POLL_INTERVAL", 5*time.Second),
 
 		EmailDebugRecipients: splitScopes(os.Getenv("EMAIL_DEBUG_RECIPIENTS")),
 
@@ -160,3 +167,18 @@ func atoiOr(raw string, def int) int {
 
 // ensure atoiOr is retained even before its first caller lands.
 var _ = atoiOr
+
+// envDuration reads a Go duration string (e.g. "5s", "500ms"), falling back to
+// def when unset or unparseable — a typo should not stop the service starting,
+// only lose the override.
+func envDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
+}
