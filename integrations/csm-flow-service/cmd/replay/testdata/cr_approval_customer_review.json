@@ -1,0 +1,17 @@
+{
+  "type": "entity.changed",
+  "entityId": "cr-0031235",
+  "payload": {
+    "entityType": "change_request",
+    "entityId": "cr-0031235",
+    "changes": { "state": { "from": "REVIEW", "to": "CUSTOMER_REVIEW" } },
+    "snapshot": {
+      "number": "CHG0031235",
+      "state": "CUSTOMER_REVIEW",
+      "projectId": "proj-77",
+      "projectName": "Acme Platform",
+      "requesterName": "Thevindu Perera"
+    },
+    "actor": { "email": "thevindu@wso2.com" }
+  }
+}
