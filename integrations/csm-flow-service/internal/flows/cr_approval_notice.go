@@ -209,8 +209,8 @@ func (crApprovalNotice) resolveRecipients(
 	ctx context.Context, deps Deps,
 	audience events.CRApprovalAudience, group string, snap map[string]any,
 ) ([]string, error) {
-	if deps.Entity == nil {
-		return nil, fmt.Errorf("cr_approval_notice: entity client is not configured")
+	if deps.Recipients == nil {
+		return nil, fmt.Errorf("cr_approval_notice: recipient store is not configured")
 	}
 	var (
 		addrs []string
@@ -218,9 +218,9 @@ func (crApprovalNotice) resolveRecipients(
 	)
 	switch audience {
 	case events.CRAudienceInternal:
-		addrs, err = deps.Entity.GroupMemberEmails(ctx, group)
+		addrs, err = deps.Recipients.GroupMemberEmails(ctx, group)
 	case events.CRAudienceCustomer:
-		addrs, err = deps.Entity.ProjectContactEmails(ctx, crStringField(snap, "projectId"))
+		addrs, err = deps.Recipients.ProjectContactEmails(ctx, crStringField(snap, "projectId"))
 	default:
 		return nil, fmt.Errorf("cr_approval_notice: unknown audience %q", audience)
 	}

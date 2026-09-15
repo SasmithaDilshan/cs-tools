@@ -35,11 +35,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/config"
-	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/entity"
+
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/flows"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/middleware"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/store"
 )
 
 // shutdownGracePeriod bounds the HTTP server's graceful shutdown. The
@@ -67,15 +69,21 @@ func main() {
 		Topic:            cfg.EventHubTopic,
 	}
 
-	// entity-service client: safe to construct even when unconfigured (calls
-	// fail lazily). Only passed to flows that need it.
-	entityClient := entity.NewClient(entity.Config{
-		BaseURL:      cfg.EntityBaseURL,
-		TokenURL:     cfg.OAuthTokenURL,
-		ClientID:     cfg.OAuthClientID,
-		ClientSecret: cfg.OAuthSecret,
-		Scopes:       cfg.EntityScopes,
-	})
+	// The CSM database: where the records that trigger flows live, and where
+	// a flow resolves its recipients from. Required — a flow with no store can
+	// resolve nobody, so failing at startup beats discovering it per record.
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("startup: database", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	csmStore := store.New(pool)
+
+	// Compile-time proof the store still satisfies what flows ask for. Asserted
+	// here rather than in internal/flows, which has no other reason to import
+	// the store package.
+	var _ flows.Recipients = csmStore
 
 	// Producer flows use to publish back onto the main topic — a notification
 	// request csm-notification-service sends, or (later) timer.fired.
@@ -100,7 +108,7 @@ func main() {
 
 	registry := flows.NewRegistry(
 		flows.Deps{
-			Entity:               entityClient,
+			Recipients:           csmStore,
 			Producer:             flowProducer,
 			EmailDebugRecipients: cfg.EmailDebugRecipients,
 		},

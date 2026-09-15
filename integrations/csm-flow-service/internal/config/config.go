@@ -74,6 +74,10 @@ type Config struct {
 	// turn a would-be-silent event into mail.
 	EmailDebugRecipients []string
 
+	// DatabaseURL is the CSM Postgres the flows read: the records that trigger
+	// them and the audiences they notify. Required — see cmd/consumer.
+	DatabaseURL string
+
 	// HTTP health/metrics server.
 	Port string
 }
@@ -101,6 +105,8 @@ func Load() (Config, error) {
 		OAuthClientID: strings.TrimSpace(os.Getenv("OAUTH2_CLIENT_ID")),
 		OAuthSecret:   strings.TrimSpace(os.Getenv("OAUTH2_CLIENT_SECRET")),
 		OAuthTokenURL: strings.TrimSpace(os.Getenv("OAUTH2_TOKEN_URL")),
+
+		DatabaseURL: must("DATABASE_URL"),
 
 		EmailDebugRecipients: splitScopes(os.Getenv("EMAIL_DEBUG_RECIPIENTS")),
 

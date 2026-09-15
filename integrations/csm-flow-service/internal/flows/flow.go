@@ -34,18 +34,23 @@ package flows
 import (
 	"context"
 
-	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/entity"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
 )
 
-// EntityReader is the slice of entity-service a flow reads through. It starts
-// at the two recipient lookups the first ported flow needs and grows with each
-// port — never a speculative mirror of the whole entity API.
-type EntityReader interface {
-	// GroupMemberEmails returns the addresses of everyone in a named WSO2
-	// group, e.g. "CAB Approval".
-	GroupMemberEmails(ctx context.Context, groupName string) ([]string, error)
+// Recipients resolves who a notification goes to, by reading the CSM database
+// directly — the same reads the ServiceNow flows did with GlideRecord against
+// sys_user_grmember and project_contact, which are replicated here as
+// team_member and project_contact.
+//
+// Deliberately NOT an entity-service HTTP client: those tables sit in the same
+// database as the records that trigger the flows, so going over HTTP would mean
+// inventing endpoints to wrap a join and paying a round trip for data one query
+// away. *store.Store satisfies this.
+type Recipients interface {
+	// GroupMemberEmails returns the addresses of everyone in a named team,
+	// e.g. "CAB Approval".
+	GroupMemberEmails(ctx context.Context, teamName string) ([]string, error)
 	// ProjectContactEmails returns a customer project's contact addresses.
 	ProjectContactEmails(ctx context.Context, projectID string) ([]string, error)
 }
@@ -61,17 +66,11 @@ type EventPublisher interface {
 // that dereferences one is responsible for the entity being configured (or for
 // letting the call fail cleanly).
 type Deps struct {
-	// Entity reads from entity-service — the recipient audiences a flow
-	// resolves, and (for native entities) the records it writes.
-	//
-	// An interface, not *entity.Client, so a flow's Run is testable with a
-	// fake: Run is where a port's real behaviour lives, and a concrete client
-	// here would leave it exercisable only against a deployed service. Same
-	// consumer-defined-narrow-interface shape the scheduled-tasks sub-crons
-	// use (CaseSearcher, EmailSender). *entity.Client satisfies it; extend the
-	// interface as each ported flow needs more, exactly as that client itself
-	// grows.
-	Entity EntityReader
+	// Recipients resolves notification audiences from the CSM database.
+	// An interface so a flow's Run is testable with a fake — Run is where a
+	// port's real behaviour lives, and a concrete type here would leave it
+	// exercisable only against a live database.
+	Recipients Recipients
 	// Producer publishes back onto the bus: a notification-request event that
 	// csm-notification-service sends, or (later) timer.fired from the sweeper.
 	// An interface for the same reason as Entity; *eventbus.Producer satisfies it.
@@ -115,11 +114,8 @@ type Flow interface {
 	Run(ctx context.Context, evt Event, deps Deps) error
 }
 
-// The production clients satisfy the interfaces above. These assertions are the
-// guard that narrowing Deps for testability did not quietly fork the contract:
-// add a method to EntityReader without adding it to *entity.Client and this
-// stops compiling.
-var (
-	_ EntityReader   = (*entity.Client)(nil)
-	_ EventPublisher = (*eventbus.Producer)(nil)
-)
+// The production producer satisfies EventPublisher. *store.Store satisfies
+// Recipients, asserted in cmd/consumer where the two are wired — asserting it
+// here would make this package import the store, which it has no other reason
+// to know about.
+var _ EventPublisher = (*eventbus.Producer)(nil)
