@@ -1,18 +1,14 @@
 {
   "type": "entity.changed",
-  "entityId": "cr-0031234",
+  "entityId": "11111111-2222-3333-4444-555555555555",
   "payload": {
     "entityType": "change_request",
-    "entityId": "cr-0031234",
+    "entityId": "11111111-2222-3333-4444-555555555555",
     "changes": { "state": { "from": "NEW", "to": "ASSESS" } },
     "snapshot": {
-      "number": "CHG0031234",
+      "id": "11111111-2222-3333-4444-555555555555",
       "state": "ASSESS",
-      "gitReference": "https://github.com/wso2-enterprise/choreo-apis/pull/42",
-      "projectId": "proj-77",
-      "projectName": "Acme Platform",
-      "requesterName": "Thevindu Perera"
-    },
-    "actor": { "email": "thevindu@wso2.com" }
+      "git_reference": "https://github.com/wso2-enterprise/choreo-apis/pull/42"
+    }
   }
 }

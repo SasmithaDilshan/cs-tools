@@ -209,6 +209,12 @@ type CRApprovalRequestedPayload struct {
 	RequesterName string `json:"requesterName,omitempty"`
 	// ProjectName is the customer project's name, shown in the body.
 	ProjectName string `json:"projectName,omitempty"`
+	// ProjectID is the project the change request belongs to. Carried for the
+	// sending service's benefit, not this one's: a customer-audience notice
+	// links into the customer portal, whose change-request page is nested under
+	// the project (/projects/<id>/operations/change-requests/<crId>), so a
+	// notice without it cannot be linked at all.
+	ProjectID string `json:"projectId,omitempty"`
 	// Subject is the fully rendered subject line, so the sending service does
 	// not have to reproduce this flow's branch-specific wording.
 	Subject string `json:"subject"`

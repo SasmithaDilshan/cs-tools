@@ -154,28 +154,38 @@ func (f crApprovalNotice) Run(ctx context.Context, evt Event, deps Deps) error {
 	}
 	branch := crApprovalStates[state]
 
-	snap := payload.Snapshot
-	number := crStringField(snap, "number")
-	subject := crSubject(number, branch.suffix, "")
+	// Read the record rather than the snapshot. The snapshot is only the
+	// changed table's own columns, and everything the notice says -- the
+	// number, the requester, the project -- lives elsewhere. This is also what
+	// the ServiceNow original did: its subflows read fields off the triggering
+	// record, not off a diff.
+	if deps.ChangeRequests == nil {
+		return fmt.Errorf("cr_approval_notice: change request reader is not configured")
+	}
+	details, err := deps.ChangeRequests.ChangeRequestDetails(ctx, payload.EntityID)
+	if err != nil {
+		return fmt.Errorf("cr_approval_notice: read change request %s: %w", payload.EntityID, err)
+	}
 
 	notice := events.CRApprovalRequestedPayload{
 		ChangeRequestID: payload.EntityID,
-		Number:          number,
+		Number:          details.Number,
 		State:           state,
 		Audience:        branch.audience,
-		RequesterName:   crStringField(snap, "requesterName"),
-		ProjectName:     crStringField(snap, "projectName"),
+		RequesterName:   details.RequesterName,
+		ProjectName:     details.ProjectName,
+		ProjectID:       details.ProjectID,
 	}
 
 	if branch.audience == events.CRAudienceInternal {
-		notice.Team = crTeamFromGitReference(crStringField(snap, "gitReference"))
+		notice.Team = crTeamFromGitReference(details.GitReference)
 		notice.GroupName = branch.group
-		notice.Subject = crSubject(number, branch.suffix, notice.Team)
+		notice.Subject = crSubject(details.Number, branch.suffix, notice.Team)
 	} else {
-		notice.Subject = subject
+		notice.Subject = crSubject(details.Number, branch.suffix, "")
 	}
 
-	recipients, err := f.resolveRecipients(ctx, deps, branch.audience, branch.group, snap)
+	recipients, err := f.resolveRecipients(ctx, deps, branch.audience, branch.group, details.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -214,7 +224,7 @@ func (f crApprovalNotice) Run(ctx context.Context, evt Event, deps Deps) error {
 // published payload is stable for the same input.
 func (crApprovalNotice) resolveRecipients(
 	ctx context.Context, deps Deps,
-	audience events.CRApprovalAudience, group string, snap map[string]any,
+	audience events.CRApprovalAudience, group, projectID string,
 ) ([]string, error) {
 	if deps.Recipients == nil {
 		return nil, fmt.Errorf("cr_approval_notice: recipient store is not configured")
@@ -227,7 +237,7 @@ func (crApprovalNotice) resolveRecipients(
 	case events.CRAudienceInternal:
 		addrs, err = deps.Recipients.GroupMemberEmails(ctx, group)
 	case events.CRAudienceCustomer:
-		addrs, err = deps.Recipients.ProjectContactEmails(ctx, crStringField(snap, "projectId"))
+		addrs, err = deps.Recipients.ProjectContactEmails(ctx, projectID)
 	default:
 		return nil, fmt.Errorf("cr_approval_notice: unknown audience %q", audience)
 	}
@@ -265,19 +275,6 @@ func crTeamFromGitReference(ref string) string {
 	default:
 		return "MS"
 	}
-}
-
-// crStringField reads one string out of the entity.changed snapshot, yielding
-// "" for an absent or non-string value rather than panicking — a snapshot is
-// upstream data, not a struct this service controls.
-func crStringField(snap map[string]any, key string) string {
-	if snap == nil {
-		return ""
-	}
-	if v, ok := snap[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 // normaliseAddresses lower-cases, drops blanks, de-duplicates and sorts.

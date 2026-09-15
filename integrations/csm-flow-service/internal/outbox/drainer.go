@@ -84,7 +84,7 @@ func (d *Drainer) Run(ctx context.Context) {
 	}
 
 	for {
-		n, err := d.drainOnce(ctx)
+		n, err := d.DrainOnce(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -102,7 +102,13 @@ func (d *Drainer) Run(ctx context.Context) {
 	}
 }
 
-func (d *Drainer) drainOnce(ctx context.Context) (int, error) {
+// DrainOnce claims one batch and dispatches it, returning how many rows it
+// took. Run calls it in a loop; it is exported so a test — or cmd/dryrun —
+// can drain exactly once without starting a polling goroutine and racing it.
+//
+// Claiming is a WRITE: the rows it returns are marked published and will not be
+// seen again, whatever the caller then does with them.
+func (d *Drainer) DrainOnce(ctx context.Context) (int, error) {
 	changes, err := d.Claimer.ClaimChanges(ctx, d.EntityTypes, d.BatchSize)
 	if err != nil {
 		return 0, err

@@ -56,6 +56,40 @@ type Recipients interface {
 	ProjectContactEmails(ctx context.Context, projectID string) ([]string, error)
 }
 
+// ChangeRequestDetails is what a change-request notice needs beyond the row
+// change that triggered it.
+//
+// It exists because the outbox snapshot is NOT enough. The trigger records
+// to_jsonb(NEW) of the table that changed, so a change_request row change
+// carries exactly change_request's own columns — id, state, git_reference, in
+// the database's snake_case. The number lives on work_item, the project and
+// the requester are two joins away, and none of them appear under the
+// camelCase names a JSON payload would suggest. A flow reading them off the
+// snapshot silently gets "" for every one, which is how a notice ends up with
+// an empty subject and a customer branch that resolves nobody.
+type ChangeRequestDetails struct {
+	// Number is the human-readable reference, e.g. "CHG0031234" — work_item.number.
+	Number string
+	// GitReference is what the internal subflow branched on to pick a team.
+	GitReference string
+	// RequesterName is who opened the change request.
+	RequesterName string
+	// ProjectID is the project the change request belongs to. The customer
+	// portal nests its change-request page under the project, so a notice
+	// without this cannot be linked.
+	ProjectID string
+	// ProjectName is shown in the email body.
+	ProjectName string
+}
+
+// ChangeRequests reads a change request's surrounding detail. Same reasoning as
+// Recipients: the rows are in the database this service already holds a pool
+// for, so a join beats inventing an endpoint to wrap one. *store.Store
+// satisfies this.
+type ChangeRequests interface {
+	ChangeRequestDetails(ctx context.Context, id string) (ChangeRequestDetails, error)
+}
+
 // EventPublisher is the bus write a flow makes: one record, keyed so every
 // event about the same entity stays ordered on one partition.
 type EventPublisher interface {
@@ -72,6 +106,10 @@ type Deps struct {
 	// port's real behaviour lives, and a concrete type here would leave it
 	// exercisable only against a live database.
 	Recipients Recipients
+	// ChangeRequests reads the detail a change-request notice needs that the
+	// triggering row change does not carry. An interface for the same reason
+	// as Recipients.
+	ChangeRequests ChangeRequests
 	// Producer publishes back onto the bus: a notification-request event that
 	// csm-notification-service sends, or (later) timer.fired from the sweeper.
 	// An interface for the same reason as Entity; *eventbus.Producer satisfies it.

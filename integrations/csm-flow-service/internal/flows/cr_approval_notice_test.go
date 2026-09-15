@@ -17,7 +17,9 @@
 package flows
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
@@ -250,4 +252,217 @@ func TestBuildNoticeAppliesDebugRecipients(t *testing.T) {
 			t.Fatalf("got %v, want none — debug mode must not invent a notice nobody would have received", got)
 		}
 	})
+}
+
+// fakeRecipients answers the two audience lookups without a database.
+type fakeRecipients struct {
+	group    map[string][]string
+	contacts map[string][]string
+	askedFor string
+}
+
+func (f *fakeRecipients) GroupMemberEmails(_ context.Context, team string) ([]string, error) {
+	f.askedFor = "group:" + team
+	return f.group[team], nil
+}
+
+func (f *fakeRecipients) ProjectContactEmails(_ context.Context, projectID string) ([]string, error) {
+	f.askedFor = "project:" + projectID
+	return f.contacts[projectID], nil
+}
+
+// fakeCRs stands in for the database read the notice needs. Its zero value
+// answers with an empty record, which is exactly what a deleted change request
+// looks like.
+type fakeCRs struct {
+	details ChangeRequestDetails
+	err     error
+	askedID string
+}
+
+func (f *fakeCRs) ChangeRequestDetails(_ context.Context, id string) (ChangeRequestDetails, error) {
+	f.askedID = id
+	return f.details, f.err
+}
+
+// fakeProducer captures the published bytes instead of writing to a bus.
+type fakeProducer struct{ published [][]byte }
+
+func (p *fakeProducer) Publish(_ context.Context, _, value []byte) error {
+	p.published = append(p.published, value)
+	return nil
+}
+
+// runAndDecode runs the flow and returns the single notice it published, or
+// nil when it published nothing.
+func runAndDecode(t *testing.T, evt Event, deps Deps, prod *fakeProducer) *events.CRApprovalRequestedPayload {
+	t.Helper()
+	if err := (crApprovalNotice{}).Run(context.Background(), evt, deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(prod.published) == 0 {
+		return nil
+	}
+	if len(prod.published) != 1 {
+		t.Fatalf("published %d events, want exactly 1 — the port collapses ServiceNow's per-recipient loop into one notice", len(prod.published))
+	}
+	var env events.Envelope
+	if err := json.Unmarshal(prod.published[0], &env); err != nil {
+		t.Fatalf("published value is not an envelope: %v", err)
+	}
+	if env.Type != events.TypeCRApprovalRequested {
+		t.Fatalf("published type = %q, want %q", env.Type, events.TypeCRApprovalRequested)
+	}
+	var notice events.CRApprovalRequestedPayload
+	if err := json.Unmarshal(env.Payload, &notice); err != nil {
+		t.Fatalf("payload is not a CR notice: %v", err)
+	}
+	return &notice
+}
+
+// TestCRApprovalNotice_RunPublishesInternalNotice pins the whole internal
+// branch: which audience is asked for, and every field the sending service
+// then relies on.
+func TestCRApprovalNotice_RunPublishesInternalNotice(t *testing.T) {
+	rec := &fakeRecipients{group: map[string][]string{
+		"Devops Review": {"B@wso2.com", "a@wso2.com", "a@wso2.com"},
+	}}
+	crs := &fakeCRs{details: ChangeRequestDetails{
+		Number:        "CHG0031234",
+		GitReference:  "https://github.com/wso2/choreo-deploy",
+		RequesterName: "Sasmitha",
+		ProjectID:     "proj-9",
+		ProjectName:   "Acme Cloud",
+	}}
+	prod := &fakeProducer{}
+	evt := changedEvent(t, "change_request", "NEW", "REVIEW", nil)
+
+	notice := runAndDecode(t, evt, Deps{Recipients: rec, ChangeRequests: crs, Producer: prod}, prod)
+	if notice == nil {
+		t.Fatal("published nothing, want an internal approval notice")
+	}
+	if rec.askedFor != "group:Devops Review" {
+		t.Errorf("resolved %q, want the Devops Review group — REVIEW is an internal branch", rec.askedFor)
+	}
+	if want := "[WSO2 Support] [CR][Choreo] (CHG0031234) Request for approval - Review"; notice.Subject != want {
+		t.Errorf("subject = %q, want %q", notice.Subject, want)
+	}
+	// Lower-cased, de-duplicated, sorted: one person in two groups is told once.
+	if got := strings.Join(notice.Recipients, ","); got != "a@wso2.com,b@wso2.com" {
+		t.Errorf("recipients = %q, want %q", got, "a@wso2.com,b@wso2.com")
+	}
+	if notice.Audience != events.CRAudienceInternal {
+		t.Errorf("audience = %q, want internal", notice.Audience)
+	}
+	if notice.ProjectID != "proj-9" {
+		t.Errorf("projectId = %q, want proj-9 — the sending service needs it to build a portal link", notice.ProjectID)
+	}
+}
+
+// TestCRApprovalNotice_RunPublishesCustomerNotice covers the other branch: the
+// project's contacts, and a subject with no team in it.
+func TestCRApprovalNotice_RunPublishesCustomerNotice(t *testing.T) {
+	rec := &fakeRecipients{contacts: map[string][]string{
+		"proj-9": {"contact@acme.example"},
+	}}
+	crs := &fakeCRs{details: ChangeRequestDetails{
+		Number:       "CHG0031234",
+		GitReference: "https://github.com/wso2/choreo-deploy",
+		ProjectID:    "proj-9",
+	}}
+	prod := &fakeProducer{}
+	evt := changedEvent(t, "change_request", "REVIEW", "CUSTOMER_REVIEW", nil)
+
+	notice := runAndDecode(t, evt, Deps{Recipients: rec, ChangeRequests: crs, Producer: prod}, prod)
+	if notice == nil {
+		t.Fatal("published nothing, want a customer approval notice")
+	}
+	if rec.askedFor != "project:proj-9" {
+		t.Errorf("resolved %q, want the project's contacts", rec.askedFor)
+	}
+	// No [Choreo] despite the git reference: the customer subflow never
+	// carried the team.
+	if want := "[WSO2 Support] [CR] (CHG0031234) Request for approval - Customer Review"; notice.Subject != want {
+		t.Errorf("subject = %q, want %q", notice.Subject, want)
+	}
+	if notice.Team != "" || notice.GroupName != "" {
+		t.Errorf("team=%q groupName=%q, want both empty on a customer notice", notice.Team, notice.GroupName)
+	}
+}
+
+// TestCRApprovalNotice_RunSilentWithNoRecipients: an approval group with no
+// members publishes nothing at all, rather than a notice addressed to nobody.
+func TestCRApprovalNotice_RunSilentWithNoRecipients(t *testing.T) {
+	prod := &fakeProducer{}
+	evt := changedEvent(t, "change_request", "NEW", "ASSESS", nil)
+
+	notice := runAndDecode(t, evt, Deps{
+		Recipients:           &fakeRecipients{},
+		ChangeRequests:       &fakeCRs{details: ChangeRequestDetails{Number: "CHG0031234"}},
+		Producer:             prod,
+		EmailDebugRecipients: []string{"sasmitha@wso2.com"},
+	}, prod)
+	if notice != nil {
+		t.Fatalf("published %+v, want nothing — an empty group must stay silent even with a debug override set", notice)
+	}
+}
+
+// TestCRApprovalNotice_RunIgnoresTheSnapshot is the regression guard for the
+// bug this reader exists to fix.
+//
+// The outbox trigger writes to_jsonb(NEW) of the table that changed, so the
+// snapshot on a change_request row change holds change_request's own columns in
+// snake_case — never "number" (that is on work_item), never "projectId", never
+// "gitReference". A flow reading those keys gets "" for all of them and
+// publishes a notice with an empty subject; the customer branch additionally
+// resolves ProjectContactEmails("") and goes silent, so a whole audience is
+// never told anything. The snapshot here is deliberately populated with the
+// wrong-shaped keys to prove none of them reach the notice.
+func TestCRApprovalNotice_RunIgnoresTheSnapshot(t *testing.T) {
+	rec := &fakeRecipients{group: map[string][]string{"CAB Approval": {"cab@wso2.com"}}}
+	crs := &fakeCRs{details: ChangeRequestDetails{
+		Number:       "CHG-FROM-DB",
+		GitReference: "https://github.com/wso2/asgardeo-x",
+		ProjectID:    "proj-from-db",
+	}}
+	prod := &fakeProducer{}
+	evt := changedEvent(t, "change_request", "ASSESS", "AUTHORIZE", map[string]any{
+		"number":       "CHG-FROM-SNAPSHOT",
+		"gitReference": "https://github.com/wso2/choreo-x",
+		"projectId":    "proj-from-snapshot",
+	})
+
+	notice := runAndDecode(t, evt, Deps{Recipients: rec, ChangeRequests: crs, Producer: prod}, prod)
+	if notice == nil {
+		t.Fatal("published nothing, want an AUTHORIZE notice")
+	}
+	if crs.askedID != "cr-1" {
+		t.Errorf("read change request %q, want the entity the outbox row names", crs.askedID)
+	}
+	if notice.Number != "CHG-FROM-DB" {
+		t.Errorf("number = %q, want the record's — the snapshot cannot carry it", notice.Number)
+	}
+	if notice.Team != "Asgardeo" {
+		t.Errorf("team = %q, want Asgardeo (from the record's git reference)", notice.Team)
+	}
+	if notice.ProjectID != "proj-from-db" {
+		t.Errorf("projectId = %q, want the record's", notice.ProjectID)
+	}
+}
+
+// TestCRApprovalNotice_RunOnDeletedChangeRequest: the record can vanish between
+// the outbox row being written and this running. The reader reports a zero
+// value, and the flow must not treat that as a fault to retry forever.
+func TestCRApprovalNotice_RunOnDeletedChangeRequest(t *testing.T) {
+	prod := &fakeProducer{}
+	evt := changedEvent(t, "change_request", "NEW", "CUSTOMER_APPROVAL", nil)
+
+	notice := runAndDecode(t, evt, Deps{
+		Recipients:     &fakeRecipients{},
+		ChangeRequests: &fakeCRs{},
+		Producer:       prod,
+	}, prod)
+	if notice != nil {
+		t.Fatalf("published %+v, want nothing for a change request that no longer exists", notice)
+	}
 }

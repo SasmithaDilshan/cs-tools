@@ -85,6 +85,7 @@ func main() {
 	// here rather than in internal/flows, which has no other reason to import
 	// the store package.
 	var _ flows.Recipients = csmStore
+	var _ flows.ChangeRequests = csmStore
 
 	// Producer flows use to publish back onto the main topic — a notification
 	// request csm-notification-service sends, or (later) timer.fired.
@@ -110,6 +111,7 @@ func main() {
 	registry := flows.NewRegistry(
 		flows.Deps{
 			Recipients:           csmStore,
+			ChangeRequests:       csmStore,
 			Producer:             flowProducer,
 			EmailDebugRecipients: cfg.EmailDebugRecipients,
 		},

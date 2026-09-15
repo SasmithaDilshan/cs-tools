@@ -77,9 +77,9 @@ func TestDrainOnce_RendersTheEventAFlowExpects(t *testing.T) {
 	disp := &fakeDispatcher{}
 	d := &Drainer{Claimer: claimer, Dispatcher: disp, EntityTypes: []string{"change_request"}}
 
-	n, err := d.drainOnce(context.Background())
+	n, err := d.DrainOnce(context.Background())
 	if err != nil || n != 1 {
-		t.Fatalf("drainOnce = (%d, %v), want (1, nil)", n, err)
+		t.Fatalf("DrainOnce = (%d, %v), want (1, nil)", n, err)
 	}
 	if len(disp.got) != 1 {
 		t.Fatalf("dispatched %d records, want 1", len(disp.got))
@@ -125,7 +125,7 @@ func TestDrainOnce_RendersTheEventAFlowExpects(t *testing.T) {
 func TestDrainOnce_PassesTheEntityTypeFilter(t *testing.T) {
 	claimer := &fakeClaimer{}
 	d := &Drainer{Claimer: claimer, Dispatcher: &fakeDispatcher{}, EntityTypes: []string{"change_request", "case"}}
-	if _, err := d.drainOnce(context.Background()); err != nil {
+	if _, err := d.DrainOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(claimer.types) != 2 || claimer.types[0] != "change_request" {
@@ -140,7 +140,7 @@ func TestDrainOnce_OneBadRowDoesNotWedgeTheBatch(t *testing.T) {
 	claimer := &fakeClaimer{batches: [][]store.Change{{change(1), change(2)}}}
 	d := &Drainer{Claimer: claimer, Dispatcher: disp}
 
-	n, err := d.drainOnce(context.Background())
+	n, err := d.DrainOnce(context.Background())
 	if err != nil {
 		t.Fatalf("a failing flow must not fail the drain: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestDrainOnce_OneBadRowDoesNotWedgeTheBatch(t *testing.T) {
 func TestDrainOnce_ClaimErrorSurfaces(t *testing.T) {
 	sentinel := errors.New("db down")
 	d := &Drainer{Claimer: &fakeClaimer{err: sentinel}, Dispatcher: &fakeDispatcher{}}
-	if _, err := d.drainOnce(context.Background()); !errors.Is(err, sentinel) {
+	if _, err := d.DrainOnce(context.Background()); !errors.Is(err, sentinel) {
 		t.Fatalf("got %v, want the claim error", err)
 	}
 }

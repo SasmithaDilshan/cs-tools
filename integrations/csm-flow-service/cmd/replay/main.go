@@ -64,7 +64,9 @@ func main() {
 	fmt.Printf("event   : type=%s entityId=%s (knownType=%v)\n", env.Type, env.EntityID, env.Type.IsKnown())
 	fmt.Printf("payload : %s\n\n", compact(env.Payload))
 
-	registry := flows.NewRegistry(flows.Deps{}, flows.All()...)
+	// Catalogue, not All: a flow is worth replaying before it is enabled —
+	// that is when its trigger condition is least proven.
+	registry := flows.NewRegistry(flows.Deps{}, flows.Catalogue()...)
 	evt := flows.Event{
 		Envelope: env,
 		Record:   eventbus.Record{Topic: "cs-events", Value: data},
@@ -72,18 +74,18 @@ func main() {
 
 	registered := registry.Flows()
 	if len(registered) == 0 {
-		fmt.Println("no flows registered yet (flows.All() is empty) — register a flow in internal/flows/register.go to see it match here.")
+		fmt.Println("no flows ported yet (flows.Catalogue() is empty).")
 	} else {
 		matches := 0
-		fmt.Println("flow matching:")
+		fmt.Println("flow matching (enabled=false means ported but not yet live — see flows.All):")
 		for _, f := range registered {
 			m := f.Match(evt)
 			if m {
 				matches++
 			}
-			fmt.Printf("  %-30s match=%v\n", f.Key(), m)
+			fmt.Printf("  %-30s match=%v enabled=%v\n", f.Key(), m, enabled(f.Key()))
 		}
-		fmt.Printf("\n%d/%d registered flows match this event\n", matches, len(registered))
+		fmt.Printf("\n%d/%d ported flows match this event\n", matches, len(registered))
 	}
 
 	if *run {
@@ -118,4 +120,14 @@ func compact(raw json.RawMessage) string {
 		return string(raw)
 	}
 	return string(b)
+}
+
+// enabled reports whether a ported flow is also live in production.
+func enabled(key string) bool {
+	for _, f := range flows.All() {
+		if f.Key() == key {
+			return true
+		}
+	}
+	return false
 }

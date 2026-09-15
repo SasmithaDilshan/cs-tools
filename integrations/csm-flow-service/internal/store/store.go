@@ -33,9 +33,13 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/flows"
 )
 
 // Store reads the CSM database.
@@ -112,6 +116,48 @@ func (s *Store) ClaimChanges(ctx context.Context, entityTypes []string, limit in
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ChangeRequestDetails reads the surrounding detail a change-request notice
+// needs and the outbox row does not carry.
+//
+// The outbox snapshot is to_jsonb(NEW) of the table that changed, so a
+// change_request row change carries change_request's three columns and nothing
+// else: the number is on work_item, the project and the requester are joins
+// away. The ServiceNow original read these off the triggering record too, so
+// reading them here is the faithful port, not an addition.
+//
+// A change request that does not exist yields a zero value and no error: the
+// row can be deleted between the outbox row being written and this running, and
+// a notice about a deleted record is a silent no-op, not a fault to retry.
+func (s *Store) ChangeRequestDetails(ctx context.Context, id string) (flows.ChangeRequestDetails, error) {
+	const query = `
+		SELECT wi.number,
+		       COALESCE(cr.git_reference, ''),
+		       COALESCE(
+		           NULLIF(TRIM(COALESCE(u.name, '')), ''),
+		           NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), ''),
+		           ''
+		       ),
+		       COALESCE(wi.project_id::text, ''),
+		       COALESCE(p.name, '')
+		FROM change_request cr
+		JOIN work_item wi   ON wi.id = cr.id
+		LEFT JOIN "user" u  ON u.id = wi.opened_by_user_id
+		LEFT JOIN project p ON p.id = wi.project_id
+		WHERE cr.id = $1::uuid`
+
+	var d flows.ChangeRequestDetails
+	err := s.db.QueryRow(ctx, query, id).Scan(
+		&d.Number, &d.GitReference, &d.RequesterName, &d.ProjectID, &d.ProjectName,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return flows.ChangeRequestDetails{}, nil
+	}
+	if err != nil {
+		return flows.ChangeRequestDetails{}, fmt.Errorf("store: read change request %s: %w", id, err)
+	}
+	return d, nil
 }
 
 // GroupMemberEmails returns the addresses of everyone in a named team — the
