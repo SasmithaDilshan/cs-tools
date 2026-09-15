@@ -56,6 +56,24 @@ type Config struct {
 	OAuthSecret   string
 	OAuthTokenURL string
 
+	// EmailDebugRecipients (EMAIL_DEBUG_RECIPIENTS) redirects every notification
+	// a flow would request to this list instead of the real resolved audience —
+	// approval groups, project contacts, watchers. It exists so a dev or staging
+	// deployment can be exercised end to end without mail reaching real
+	// customers or internal groups.
+	//
+	// Mirrors csm-notification-service's EMAIL_DEBUG_MODE/EMAIL_DEBUG_RECIPIENTS
+	// pair, with one deliberate simplification: there is no separate mode flag.
+	// A non-empty list IS the switch. The pair exists there partly to guard the
+	// mode=true-but-list-empty misconfiguration, which cannot arise when the
+	// list alone decides.
+	//
+	// Recipient resolution still runs either way — only the final list is
+	// swapped — so this never masks a broken entity-service lookup. And a flow
+	// that resolves NO real recipients still sends nothing: debug mode must not
+	// turn a would-be-silent event into mail.
+	EmailDebugRecipients []string
+
 	// HTTP health/metrics server.
 	Port string
 }
@@ -83,6 +101,8 @@ func Load() (Config, error) {
 		OAuthClientID: strings.TrimSpace(os.Getenv("OAUTH2_CLIENT_ID")),
 		OAuthSecret:   strings.TrimSpace(os.Getenv("OAUTH2_CLIENT_SECRET")),
 		OAuthTokenURL: strings.TrimSpace(os.Getenv("OAUTH2_TOKEN_URL")),
+
+		EmailDebugRecipients: splitScopes(os.Getenv("EMAIL_DEBUG_RECIPIENTS")),
 
 		Port: getenv("PORT", defaultPort),
 	}

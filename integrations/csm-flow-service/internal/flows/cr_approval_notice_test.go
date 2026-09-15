@@ -221,3 +221,33 @@ func TestCRApprovalNotice_NotRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildNoticeAppliesDebugRecipients proves EMAIL_DEBUG_RECIPIENTS replaces
+// the real audience rather than adding to it, and — the part that matters — that
+// it does NOT turn a would-be-silent event into mail.
+func TestBuildNoticeAppliesDebugRecipients(t *testing.T) {
+	t.Run("replaces the resolved audience entirely", func(t *testing.T) {
+		real := []string{"devops-a@wso2.com", "devops-b@wso2.com"}
+		debug := []string{"sasmitha@wso2.com"}
+
+		got := applyDebugRecipients(real, debug)
+		if len(got) != 1 || got[0] != "sasmitha@wso2.com" {
+			t.Fatalf("got %v, want exactly [sasmitha@wso2.com] — the real audience must be replaced, not appended", got)
+		}
+	})
+
+	t.Run("an empty override leaves the real audience alone", func(t *testing.T) {
+		real := []string{"devops-a@wso2.com"}
+		got := applyDebugRecipients(real, nil)
+		if len(got) != 1 || got[0] != "devops-a@wso2.com" {
+			t.Fatalf("got %v, want the real audience unchanged", got)
+		}
+	})
+
+	t.Run("no real recipients stays silent even with an override set", func(t *testing.T) {
+		got := applyDebugRecipients(nil, []string{"sasmitha@wso2.com"})
+		if len(got) != 0 {
+			t.Fatalf("got %v, want none — debug mode must not invent a notice nobody would have received", got)
+		}
+	})
+}

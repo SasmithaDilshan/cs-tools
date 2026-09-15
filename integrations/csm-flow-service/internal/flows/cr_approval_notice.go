@@ -176,9 +176,14 @@ func (f crApprovalNotice) Run(ctx context.Context, evt Event, deps Deps) error {
 		// Nobody to tell. Not an error: an approval group with no members, or
 		// a project with no contacts, is a real state, and failing here would
 		// retry the whole record forever against something no retry can fix.
+		//
+		// Checked BEFORE the debug-recipient swap on purpose: a deployment
+		// pointed at a test mailbox must still stay silent about an event that
+		// would have notified nobody, or it produces mail the real deployment
+		// never would.
 		return nil
 	}
-	notice.Recipients = recipients
+	notice.Recipients = applyDebugRecipients(recipients, deps.EmailDebugRecipients)
 
 	body, err := json.Marshal(events.Envelope{
 		Type:     events.TypeCRApprovalRequested,
@@ -284,6 +289,21 @@ func normaliseAddresses(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// applyDebugRecipients swaps a resolved audience for the configured debug list,
+// when one is configured. Real resolution has already happened by the time this
+// is called, so a broken entity-service lookup still surfaces as an error
+// rather than being hidden behind the override.
+//
+// An empty real audience stays empty regardless: a deployment pointed at a test
+// mailbox must stay silent about an event that would have notified nobody, or
+// it produces mail the real deployment never would.
+func applyDebugRecipients(resolved, debug []string) []string {
+	if len(resolved) == 0 || len(debug) == 0 {
+		return resolved
+	}
+	return normaliseAddresses(debug)
 }
 
 // mustMarshal encodes a payload that cannot fail to encode — every field is a

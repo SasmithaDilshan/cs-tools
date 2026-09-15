@@ -99,7 +99,11 @@ func main() {
 	}
 
 	registry := flows.NewRegistry(
-		flows.Deps{Entity: entityClient, Producer: flowProducer},
+		flows.Deps{
+			Entity:               entityClient,
+			Producer:             flowProducer,
+			EmailDebugRecipients: cfg.EmailDebugRecipients,
+		},
 		flows.All()...,
 	)
 

@@ -50,6 +50,17 @@ type Deps struct {
 	// Producer publishes back onto the bus: a notification-request event that
 	// csm-notification-service sends, or (later) timer.fired from the sweeper.
 	Producer *eventbus.Producer
+	// EmailDebugRecipients, when non-empty, replaces the real audience of every
+	// notification a flow requests — approval groups, project contacts,
+	// watchers — so a dev or staging deployment can be exercised without mail
+	// reaching real people. See config.Config.EmailDebugRecipients.
+	//
+	// A flow honouring this must still RESOLVE its real recipients first and
+	// swap only the final list: that keeps a broken entity-service lookup
+	// visible instead of masked, and means a flow with no real audience still
+	// sends nothing rather than mailing the debug list about an event nobody
+	// would have been told about.
+	EmailDebugRecipients []string
 }
 
 // Event is a decoded bus record handed to a flow.
