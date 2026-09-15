@@ -54,6 +54,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/config"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/flows"
@@ -87,6 +88,8 @@ func main() {
 	if !ok {
 		fail("no ported flow %q; ported flows: %s", *flowKey, strings.Join(flows.CatalogueKeys(), ", "))
 	}
+
+	config.LoadDotEnv(".env")
 
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {

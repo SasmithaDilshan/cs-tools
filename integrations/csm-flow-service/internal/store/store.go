@@ -143,7 +143,11 @@ func (s *Store) ChangeRequestDetails(ctx context.Context, id string) (flows.Chan
 		       COALESCE(p.name, '')
 		FROM change_request cr
 		JOIN work_item wi   ON wi.id = cr.id
-		LEFT JOIN "user" u  ON u.id = wi.opened_by_user_id
+		-- requested_by_user_id, not work_item.opened_by_user_id: the change
+		-- request carries its own requester, which is ServiceNow's own
+		-- requested_by and the person the notice is actually about. The opener
+		-- is whoever created the record, frequently the sync itself.
+		LEFT JOIN "user" u  ON u.id = cr.requested_by_user_id
 		LEFT JOIN project p ON p.id = wi.project_id
 		WHERE cr.id = $1::uuid`
 

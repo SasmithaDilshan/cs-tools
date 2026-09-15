@@ -24,7 +24,10 @@
 package config
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -90,6 +93,8 @@ type Config struct {
 
 // Load reads and validates configuration from the environment.
 func Load() (Config, error) {
+	LoadDotEnv(".env")
+
 	var missing []string
 	must := func(key string) string {
 		v := strings.TrimSpace(os.Getenv(key))
@@ -181,4 +186,53 @@ func envDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// LoadDotEnv reads a .env file from the working directory and sets any
+// environment variable it names that is not already set. A real environment
+// variable always wins, so a deployment is never overridden by a file that
+// happened to be left in the image.
+//
+// Silently ignored when the file does not exist -- that is the deployed case,
+// where Choreo supplies the environment directly. Exported because the dev
+// tools (cmd/dryrun, cmd/publish) read the environment without going through
+// Load, and having one of them work from .env while another did not is a
+// confusing way to lose ten minutes.
+//
+// Mirrors csm-notification-service's own loadDotEnv rather than pulling in a
+// dependency for twenty lines.
+func LoadDotEnv(path string) {
+	f, err := os.Open(path) // #nosec G304 -- callers pass the literal ".env"
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("config: failed to open .env file", "err", err)
+		}
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		// Strip surrounding quotes, so a value containing spaces or a ";" can
+		// be written either way round.
+		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+			v = v[1 : len(v)-1]
+		}
+		if _, present := os.LookupEnv(k); !present {
+			_ = os.Setenv(k, v)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("config: error reading .env file", "err", err)
+	}
 }

@@ -47,6 +47,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/config"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/eventbus"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-flow-service/internal/events"
 )
@@ -78,6 +79,8 @@ func main() {
 	if err != nil {
 		fail("re-encode envelope: %v", err)
 	}
+
+	config.LoadDotEnv(".env")
 
 	cfg := eventbus.Config{
 		Broker:           mustEnv("EVENT_HUB_BROKER"),

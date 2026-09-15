@@ -73,13 +73,25 @@ registered before they do:
 
 1. **The double-fire guard.** ServiceNow still sends these notifications. Registering is a
    paired change with disabling `CR Approval notifications` there, in the same commit.
-2. **A consumer.** It publishes `change_request.approval_requested`, which
-   `csm-notification-service` does not handle yet — this service is forbidden from sending
-   email itself. That handler is a change in that repo, not this one.
 
-It also needs `change_request.state` in Postgres, which
-`wso2-enterprise/digiops-cs` PR #3058 adds, and an `entity.changed` publisher for
-`change_request` — nothing emits one today.
+That is now the ONLY thing outstanding. The rest of the chain is built and was run end to
+end against staging on 2026-09-15:
+
+- **The table.** `change_request` in Postgres carries `state`
+  (`change_request_state_enum`: NEW, ASSESS, AUTHORIZE, CUSTOMER_APPROVAL, SCHEDULED,
+  IMPLEMENT, REVIEW, CUSTOMER_REVIEW, ROLLBACK, CLOSED, CANCELED), `git_reference` and
+  `requested_by_user_id`. All five states this flow reacts to exist with those exact names.
+- **The trigger.** Nothing publishes `entity.changed` for a change request, and nothing
+  should: an `AFTER UPDATE` trigger writes the row diff to `event_outbox`, and
+  `internal/outbox` drains it and renders each row as an `entity.changed` envelope
+  **in process**. That envelope never touches the bus.
+- **The consumer.** `csm-notification-service` handles
+  `change_request.approval_requested` (cs-tools #1767).
+
+**The trigger is owned by the table.** If `change_request` is ever dropped and recreated —
+as happened on staging when a fuller extension table replaced the first one — the trigger
+goes with it and this flow silently stops firing, with no error anywhere. Re-apply
+`0045_event_outbox.sql`'s `CREATE TRIGGER` after any migration that recreates the table.
 
 ## Adding a flow
 
