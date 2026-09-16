@@ -218,3 +218,49 @@ func TestCRPlanDateNotice_NotRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestCRPlanDateNotice_ProposalClearsTheAnswerInOneWrite is the regression test
+// for the interaction between this flow and migration 0046.
+//
+// That migration clears the confirmation in the SAME write that moves the date,
+// so the outbox row carries both columns. ServiceNow cleared it as a separate
+// update, so the original never saw this shape. If Match read the confirmation
+// first, a proposal against an already-answered CR would look like "answer
+// cleared" -- not a notice -- and Devops Approval would never hear about any
+// second proposal.
+func TestCRPlanDateNotice_ProposalClearsTheAnswerInOneWrite(t *testing.T) {
+	payload := events.EntityChangedPayload{
+		EntityType: "change_request",
+		EntityID:   "cr-1",
+		Changes: map[string]map[string]any{
+			"customer_updated_on":                {"from": "2026-10-01T00:00:00Z", "to": "2026-11-01T00:00:00Z"},
+			"customer_updated_date_confirmation": {"from": "AGREE", "to": nil},
+		},
+		Snapshot: map[string]any{"state": "CUSTOMER_APPROVAL"},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	evt := Event{Envelope: events.Envelope{
+		Type: events.TypeEntityChanged, EntityID: "cr-1", Payload: raw,
+	}}
+
+	turn, ok := (crPlanDateNotice{}).turn(evt)
+	if !ok {
+		t.Fatal("no match: a second proposal must still notify, even though it cleared a standing answer")
+	}
+	if turn != crTurnCustomerProposed {
+		t.Errorf("turn = %v, want customer-proposed — the date is the event, the cleared answer is a consequence", turn)
+	}
+
+	rec := &fakeRecipients{group: map[string][]string{"Devops Approval": {"devops@wso2.com"}}}
+	prod := &fakeProducer{}
+	n := runPlanDate(t, evt, planDateDeps(rec, &fakeCRs{details: ChangeRequestDetails{Number: "CHG0031234"}}, prod), prod)
+	if n == nil {
+		t.Fatal("published nothing")
+	}
+	if n.Kind != events.CRPlanDateCustomerProposed || n.Audience != events.CRAudienceInternal {
+		t.Errorf("kind=%q audience=%q, want the internal proposal notice", n.Kind, n.Audience)
+	}
+}

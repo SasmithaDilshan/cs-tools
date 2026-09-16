@@ -105,22 +105,18 @@ func (crPlanDateNotice) turn(evt Event) (crPlanDateTurn, bool) {
 		return crTurnNone, false
 	}
 
-	// WSO2's answer takes precedence: if both columns moved in one write, the
-	// answer is the newer fact and the proposal it answers is implied.
-	if to, changed := crChangedTo(payload, crColConfirmation); changed {
-		switch to {
-		case "AGREE":
-			return crTurnWSO2Accepted, true
-		case "DISAGREE":
-			return crTurnWSO2Rejected, true
-		}
-		// Cleared, or some third value: not an answer, so not a notice. This is
-		// the path "CR change start plan date notifications" creates when it
-		// blanks the field, and it must stay silent or every proposal would
-		// also mail the customer.
-		return crTurnNone, false
-	}
-
+	// A DATE CHANGE IS READ FIRST, and the order matters.
+	//
+	// Migration 0046 clears the confirmation in the same write that moves the
+	// date (BEFORE UPDATE, so the outbox sees one row with BOTH columns in its
+	// diff). ServiceNow did the same thing as a second, separate update, which
+	// is why the original could treat the two independently and this cannot.
+	//
+	// Checking the confirmation first would mean a proposal that also cleared a
+	// standing answer got read as "answer cleared" -- not a notice -- and the
+	// internal notice would never fire for any CR that had already been
+	// answered once. Checking the date first is correct on the substance too:
+	// the new date is the event, and the answer it invalidates is a consequence.
 	if _, changed := crChangedTo(payload, crColCustomerUpdatedOn); changed {
 		// state=5 in the original. Read from the snapshot rather than the diff:
 		// the state need not have changed, it needs to BE CUSTOMER_APPROVAL.
@@ -128,6 +124,19 @@ func (crPlanDateNotice) turn(evt Event) (crPlanDateTurn, bool) {
 			return crTurnNone, false
 		}
 		return crTurnCustomerProposed, true
+	}
+
+	if to, changed := crChangedTo(payload, crColConfirmation); changed {
+		switch to {
+		case "AGREE":
+			return crTurnWSO2Accepted, true
+		case "DISAGREE":
+			return crTurnWSO2Rejected, true
+		}
+		// Cleared on its own, with no date change: nothing happened that anyone
+		// needs telling about. Staying silent here is what stops a reset from
+		// being mistaken for an answer.
+		return crTurnNone, false
 	}
 	return crTurnNone, false
 }
