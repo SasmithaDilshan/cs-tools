@@ -36,6 +36,9 @@ var staleCasesReportTemplateRaw string
 //go:embed templates/open_cases_report.html
 var openCasesReportTemplateRaw string
 
+//go:embed templates/allocation_status_update_reminder.html
+var allocationReminderTemplateRaw string
+
 // wso2LogoURL is the white WSO2 logo variant — the alert template's header
 // sits on an orange background, unlike
 // integrations/csm-notification-service's own equivalent constant of the
@@ -56,6 +59,7 @@ func bakeLogo(raw string) string {
 var alertTemplate = bakeLogo(alertTemplateRaw)
 var staleCasesReportTemplate = bakeLogo(staleCasesReportTemplateRaw)
 var openCasesReportTemplate = bakeLogo(openCasesReportTemplateRaw)
+var allocationReminderTemplate = bakeLogo(allocationReminderTemplateRaw)
 
 // escapeHTML mirrors integrations/csm-notification-service's own
 // internal/notifications.escapeHTML exactly: HTML-escapes s and
@@ -153,6 +157,31 @@ func RenderOpenCasesReport(data OpenCasesReportData) string {
 		"<!-- [YEAR] -->", strconv.Itoa(time.Now().Year()),
 	)
 	return replacer.Replace(openCasesReportTemplate)
+}
+
+// RenderAllocationStatusUpdateReminder fills in the weekly
+// engagement-allocation status-update reminder template.
+//
+// It takes no arguments, and that is the point: this is the one email this
+// component sends that is addressed to the person who has to ACT, not to an
+// ops audience reading a report about other people. The copy is deliberately
+// identical for every recipient — it carries no case list, no name, and no
+// per-person detail — so there is nothing to substitute beyond the footer
+// year. Ported verbatim from the ServiceNow flow
+// WeeklyAllocationStatusUpdateReminderEmailFlow's own Send Email body,
+// wording and all, so the cutover changes who computes the recipients and
+// nothing the recipient actually reads.
+//
+// The instructions still point at ServiceNow Agent Workspace, and must: the
+// mirror in Postgres that decides WHO gets this email is read-only
+// (csm-sync-service syncs ServiceNow -> Postgres, never back), so the status
+// update itself is still authored in ServiceNow. This copy changes when
+// authoring moves, not when this reminder does.
+func RenderAllocationStatusUpdateReminder() string {
+	replacer := strings.NewReplacer(
+		"<!-- [YEAR] -->", strconv.Itoa(time.Now().Year()),
+	)
+	return replacer.Replace(allocationReminderTemplate)
 }
 
 // renderCaseRows builds one <tr> per case for RenderStaleCasesReport. A case
