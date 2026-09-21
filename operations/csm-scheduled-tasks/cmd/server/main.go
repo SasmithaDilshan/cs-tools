@@ -174,6 +174,12 @@ func main() {
 	// the two report tasks above, its real audience is the people who owe an update,
 	// resolved from the data — leaving it unset does not stop it mailing them.
 	// See internal/allocationreminder's own doc comment.
+	// The CSM Portal the reminder's navigation steps link to. Optional: unset
+	// just means the mail names "Engagements" without linking it. Deliberately
+	// this component's own variable rather than a shared one — point it at the
+	// portal these recipients actually use.
+	csmPortalWebBaseURL := os.Getenv("CSM_PORTAL_WEB_BASE_URL")
+
 	const allocationReminderTaskName = "allocation_status_update_reminder"
 	allocationReminderTo, allocationReminderCc := recipientsFor(recipientOverrides, allocationReminderTaskName)
 
@@ -237,7 +243,7 @@ func main() {
 		{
 			Name:     allocationReminderTaskName,
 			Schedule: scheduleFor(scheduleOverrides, allocationReminderTaskName, "0 0 * * 1"),
-			Handler:  allocationreminder.SendReminders(engagementAllocationsClient, emailClient, alertsEnabled),
+			Handler:  allocationreminder.SendReminders(engagementAllocationsClient, emailClient, csmPortalWebBaseURL, alertsEnabled),
 			To:       allocationReminderTo,
 			Cc:       allocationReminderCc,
 		},

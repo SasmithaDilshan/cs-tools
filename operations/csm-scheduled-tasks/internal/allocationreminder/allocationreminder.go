@@ -78,6 +78,10 @@ func lastCycleStart(now time.Time) time.Time {
 // SendReminders returns a registry.Task.Handler that emails everyone who owes
 // a status update for last week.
 //
+// portalBaseURL is the CSM Portal the recipients use, linked from the mail's
+// navigation steps — see notify.RenderAllocationStatusUpdateReminder. Empty is
+// valid and simply drops the hyperlink.
+//
 // emailsEnabled is cmd/server/main.go's ALERTS_ENABLED — the same global kill
 // switch stalecases and opencases honour. When false this sends nothing and
 // succeeds, so a maintenance window silences the reminder rather than failing
@@ -94,7 +98,7 @@ func lastCycleStart(now time.Time) time.Time {
 // task that gave up on the first bad address would leave most of the audience
 // unreminded AND retry the whole batch next tick, re-mailing everyone who had
 // already received it.
-func SendReminders(recipients RecipientSource, email EmailSender, emailsEnabled bool) func(ctx context.Context) error {
+func SendReminders(recipients RecipientSource, email EmailSender, portalBaseURL string, emailsEnabled bool) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !emailsEnabled {
 			return nil
@@ -113,7 +117,7 @@ func SendReminders(recipients RecipientSource, email EmailSender, emailsEnabled 
 			return nil
 		}
 
-		body := notify.RenderAllocationStatusUpdateReminder()
+		body := notify.RenderAllocationStatusUpdateReminder(portalBaseURL)
 
 		var failures []error
 		sent := 0

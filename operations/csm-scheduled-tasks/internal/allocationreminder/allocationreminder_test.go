@@ -100,6 +100,10 @@ func (f *fakeSender) SendEmail(_ context.Context, to, cc []string, subject, html
 	return nil
 }
 
+// portalURL is what a configured deployment passes; the link it produces is
+// asserted in TestSendRemindersLinksThePortal below.
+const portalURL = "https://csm.example.test"
+
 func recipients(emails ...string) []engagementallocations.Recipient {
 	out := make([]engagementallocations.Recipient, 0, len(emails))
 	for _, e := range emails {
@@ -115,7 +119,7 @@ func TestSendRemindersOneEmailPerRecipient(t *testing.T) {
 	src := &fakeSource{recipients: recipients("a@wso2.com", "b@wso2.com", "c@wso2.com")}
 	sender := &fakeSender{}
 
-	if err := SendReminders(src, sender, true)(context.Background()); err != nil {
+	if err := SendReminders(src, sender, portalURL, true)(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(sender.sent) != 3 {
@@ -141,7 +145,7 @@ func TestSendRemindersOneEmailPerRecipient(t *testing.T) {
 // calculation and the lookup.
 func TestSendRemindersAsksAboutLastWeek(t *testing.T) {
 	src := &fakeSource{}
-	if err := SendReminders(src, &fakeSender{}, true)(context.Background()); err != nil {
+	if err := SendReminders(src, &fakeSender{}, portalURL, true)(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if src.calls != 1 {
@@ -160,7 +164,7 @@ func TestSendRemindersDisabled(t *testing.T) {
 	src := &fakeSource{recipients: recipients("a@wso2.com")}
 	sender := &fakeSender{}
 
-	if err := SendReminders(src, sender, false)(context.Background()); err != nil {
+	if err := SendReminders(src, sender, portalURL, false)(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if src.calls != 0 {
@@ -175,7 +179,7 @@ func TestSendRemindersDisabled(t *testing.T) {
 // failure, and must not send anything.
 func TestSendRemindersNobodyOwing(t *testing.T) {
 	sender := &fakeSender{}
-	if err := SendReminders(&fakeSource{}, sender, true)(context.Background()); err != nil {
+	if err := SendReminders(&fakeSource{}, sender, portalURL, true)(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(sender.sent) != 0 {
@@ -190,7 +194,7 @@ func TestSendRemindersPartialFailure(t *testing.T) {
 	src := &fakeSource{recipients: recipients("a@wso2.com", "broken@wso2.com", "c@wso2.com")}
 	sender := &fakeSender{failOn: map[string]error{"broken@wso2.com": errors.New("mailbox unavailable")}}
 
-	err := SendReminders(src, sender, true)(context.Background())
+	err := SendReminders(src, sender, portalURL, true)(context.Background())
 	if err == nil {
 		t.Fatal("expected an error when a send fails, got nil")
 	}
@@ -212,11 +216,58 @@ func TestSendRemindersLookupFailure(t *testing.T) {
 	src := &fakeSource{err: errors.New("entity-service unavailable")}
 	sender := &fakeSender{}
 
-	err := SendReminders(src, sender, true)(context.Background())
+	err := SendReminders(src, sender, portalURL, true)(context.Background())
 	if err == nil {
 		t.Fatal("expected an error when the lookup fails, got nil")
 	}
 	if len(sender.sent) != 0 {
 		t.Errorf("sent %d emails despite a failed lookup", len(sender.sent))
+	}
+}
+
+// TestSendRemindersLinksThePortal pins the navigation steps to the CSM Portal.
+// The ServiceNow original told people to log into Agent Workspace and open
+// "My Allocations", which they can no longer do — a regression to that wording
+// would send every recipient somewhere they cannot reach.
+func TestSendRemindersLinksThePortal(t *testing.T) {
+	src := &fakeSource{recipients: recipients("a@wso2.com")}
+	sender := &fakeSender{}
+
+	if err := SendReminders(src, sender, portalURL, true)(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d emails, want 1", len(sender.sent))
+	}
+	body := sender.sent[0].body
+	if strings.Contains(body, "ServiceNow") {
+		t.Error("body still mentions ServiceNow; recipients cannot log in there any more")
+	}
+	if strings.Contains(body, "My Allocations") {
+		t.Error(`body still names "My Allocations", which does not exist in the CSM Portal`)
+	}
+	if !strings.Contains(body, portalURL+"/engagements") {
+		t.Errorf("body does not link the portal engagements page (%s/engagements)", portalURL)
+	}
+}
+
+// TestSendRemindersWithoutPortalURL: an unconfigured deployment must still
+// send a readable email, not one with a dangling href.
+func TestSendRemindersWithoutPortalURL(t *testing.T) {
+	src := &fakeSource{recipients: recipients("a@wso2.com")}
+	sender := &fakeSender{}
+
+	if err := SendReminders(src, sender, "", true)(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	body := sender.sent[0].body
+	if strings.Contains(body, "<!-- [ENGAGEMENTS_LINK] -->") {
+		t.Error("placeholder left unsubstituted in the sent body")
+	}
+	if strings.Contains(body, "/engagements") {
+		t.Error("rendered a link despite no portal URL being configured")
+	}
+	if !strings.Contains(body, "Engagements") {
+		t.Error("the Engagements step vanished entirely without a portal URL")
 	}
 }

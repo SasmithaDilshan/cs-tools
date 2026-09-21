@@ -187,6 +187,11 @@ that inverts two rules the two report tasks above establish:
   behind on their updates to everyone on it. The body is identical for every recipient
   (`notify.RenderAllocationStatusUpdateReminder` takes no arguments), so nothing is lost.
 
+The mail's navigation steps point at the **CSM Portal**, not ServiceNow: the original told people to log
+into Agent Workspace and use "Customer Engagements" > "My Allocations", which they can no longer do. The
+portal's engagements page is linked via `CSM_PORTAL_WEB_BASE_URL` (see the env table below) rather than
+hardcoded, since the ServiceNow-backed portal host would not resolve these records.
+
 `ALERTS_ENABLED=false` silences it like every other email here, without failing the task or
 even running the query.
 
@@ -294,6 +299,7 @@ report emails" below for why that's not a generic engine feature.
 | `DRIVER_INTERVAL` | No (default `1h`) | This component's own expected invocation cadence — must match the cron trigger configured on the Choreo Scheduled Task component itself |
 | `SUB_CRON_SCHEDULES` | No | JSON object `{"<task.Name>": "<cron expression>"}` overriding any registered task's schedule by name — see "Adding a sub-cron" above. A task not mentioned keeps its own hardcoded default |
 | `SUB_CRON_RECIPIENTS` | No | JSON object `{"<task.Name>": {"to": [...], "cc": [...]}}` giving a registered task its own extra failure-alert audience, on top of `ALERT_RECIPIENTS` — or, for a report-style task, its report's actual recipients (see "Alerting" above for which tasks work which way). A task not mentioned gets no per-task recipients |
+| `CSM_PORTAL_WEB_BASE_URL` | No | CSM Portal base URL linked from the weekly allocation reminder's navigation steps (`<base>/engagements`). Unset just means the mail names "Engagements" without linking it; a non-http(s) value is treated as unset rather than pasted into an href. Point it at the portal the recipients actually use |
 | `HOUSEKEEPING_RETENTION_DAYS` | No (default `30`) | Plain integer number of days of resolved history the `housekeeping_cleanup` sub-cron keeps — see "Housekeeping" above |
 
 No app-level execution timeout is configured here — Choreo's own Scheduled Task execution-time
