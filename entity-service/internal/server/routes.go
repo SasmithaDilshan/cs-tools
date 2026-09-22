@@ -194,7 +194,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, service.Even
 	var engagementAllocationHandler *handler.EngagementAllocationHandler
 	if db != nil {
 		engagementAllocationHandler = handler.NewEngagementAllocationHandler(
-			service.NewEngagementAllocationService(repository.NewEngagementAllocationRepository(db)))
+			service.NewEngagementAllocationService(repository.NewEngagementAllocationRepository(db), eventPublisher))
 	}
 
 	accountRepo := repository.NewAccountRepository(db)
@@ -710,6 +710,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, service.Even
 
 	if engagementAllocationHandler != nil {
 		mux.HandleFunc("GET /engagement-allocations/status-update-reminders", engagementAllocationHandler.StatusUpdateReminderRecipients)
+		mux.HandleFunc("POST /engagement-status-updates", engagementAllocationHandler.CreateStatusUpdate)
 	}
 	if alertIncidentMappingHandler != nil {
 		mux.HandleFunc("POST /alert-incident-mappings", alertIncidentMappingHandler.CreateAlertIncidentMapping)

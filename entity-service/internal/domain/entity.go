@@ -6872,3 +6872,59 @@ type StatusUpdateReminderResponse struct {
 	// Recipients is empty, never null, when nobody owes an update.
 	Recipients []StatusUpdateReminderRecipient `json:"recipients"`
 }
+
+// CreateEngagementStatusUpdateRequest files one weekly engagement status
+// update. Ported from ServiceNow's u_customer_engagement_status_update form;
+// the fields a person actually fills in, not the whole row.
+//
+// MailingList is who the update is circulated to. It is part of the request
+// rather than derived from the engagement because that is how the original
+// worked — the author decides who should read this particular update — and it
+// is persisted on the row so the audience of a past update stays auditable.
+type CreateEngagementStatusUpdateRequest struct {
+	// EngagementID is the engagement this update is about.
+	EngagementID string `json:"engagementId"`
+	// AllocationID optionally ties the update to the author's specific
+	// allocation. Absent is valid: the reminder matches on author and
+	// engagement, not allocation.
+	AllocationID *string `json:"allocationId,omitempty"`
+	// AuthorID is who wrote it. Required, and the field the weekly reminder
+	// checks — an update filed without one would silently fail to stop
+	// anybody's reminder.
+	AuthorID string `json:"authorId"`
+	Subject  string `json:"subject"`
+	// Content is the update body, HTML, as authored.
+	Content string `json:"content"`
+	// CycleStartDate is the Monday of the week this update covers,
+	// YYYY-MM-DD. Defaults to the current week's Monday when absent.
+	CycleStartDate string `json:"cycleStartDate,omitempty"`
+	// MailingList is who the update is circulated to. It becomes the email's
+	// Cc, not its To: the ServiceNow original addressed the mail to the
+	// AUTHOR and copied this list, and reversing that would change who
+	// appears as the primary recipient of every status update. Every entry
+	// is validated to be an @wso2.com address before anything is written.
+	MailingList []string `json:"mailingList"`
+}
+
+// EngagementStatusUpdate is a filed weekly status update.
+type EngagementStatusUpdate struct {
+	ID             string   `json:"id"`
+	EngagementID   string   `json:"engagementId"`
+	AllocationID   *string  `json:"allocationId,omitempty"`
+	AuthorID       string   `json:"authorId"`
+	Subject        string   `json:"subject"`
+	Content        string   `json:"content"`
+	State          string   `json:"state"`
+	CycleStartDate string   `json:"cycleStartDate"`
+	MailingList    []string `json:"mailingList"`
+	CreatedOn      string   `json:"createdOn"`
+}
+
+// EngagementNotificationContext is the surrounding detail a status-update
+// notification needs beyond the update row itself. AuthorEmail is the
+// notification's To address — see engagementContextQuery's doc comment.
+type EngagementNotificationContext struct {
+	EngagementName string
+	AuthorName     string
+	AuthorEmail    string
+}

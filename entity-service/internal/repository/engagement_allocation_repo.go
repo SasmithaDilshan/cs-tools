@@ -18,10 +18,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
 )
 
@@ -34,6 +38,14 @@ type EngagementAllocationRepository interface {
 	// update for that cycle. cycleStart is assumed already validated by the
 	// service layer.
 	StatusUpdateReminderRecipients(ctx context.Context, cycleStart time.Time) ([]domain.StatusUpdateReminderRecipient, error)
+	// CreateStatusUpdate inserts one status update and returns it as stored.
+	// cycleStart is assumed already validated/defaulted by the service.
+	CreateStatusUpdate(ctx context.Context, req domain.CreateEngagementStatusUpdateRequest, cycleStart time.Time) (domain.EngagementStatusUpdate, error)
+	// EngagementContext returns the engagement's display name plus the
+	// author's display name and email address, for the notification payload.
+	// Any of the three may be empty when the row carries none; a missing
+	// engagement is a NotFound.
+	EngagementContext(ctx context.Context, engagementID, authorID string) (domain.EngagementNotificationContext, error)
 }
 
 type engagementAllocationRepo struct {
@@ -130,4 +142,87 @@ func (r *engagementAllocationRepo) StatusUpdateReminderRecipients(ctx context.Co
 		return nil, fmt.Errorf("status update reminder recipients: rows: %w", err)
 	}
 	return recipients, nil
+}
+
+// createStatusUpdateQuery writes the update as PUBLISHED.
+//
+// There is no draft path here on purpose: the ServiceNow original let a row
+// exist in DRAFT and still counted it as "this person has updated", which is
+// one of the defects the weekly reminder port fixes. An endpoint that could
+// write a draft would put that defect back on the other side of the fix.
+// Filing an update through this endpoint means publishing it.
+//
+// mailing_list is stored as the comma-joined To audience, matching the source
+// column's own free-text shape (string(2500) upstream, "Email list to send
+// the update"). CcList is deliberately NOT persisted: it is a delivery
+// courtesy for one send, not part of the record's audience.
+const createStatusUpdateQuery = `
+	INSERT INTO customer_engagement_status_update
+		(id, created_on, updated_on, created_by, updated_by,
+		 engagement_id, allocation_id, author_id, subject, content,
+		 state, frequency, cycle_start_date, published_date, mailing_list)
+	VALUES
+		(gen_random_uuid(), NOW(), NOW(), $1, $1,
+		 $2, $3, $4, $5, $6,
+		 'PUBLISHED', 'WEEKLY', $7, NOW(), $8)
+	RETURNING id, engagement_id, allocation_id, author_id, subject, content,
+	          state::text, cycle_start_date, mailing_list, created_on`
+
+func (r *engagementAllocationRepo) CreateStatusUpdate(ctx context.Context, req domain.CreateEngagementStatusUpdateRequest, cycleStart time.Time) (domain.EngagementStatusUpdate, error) {
+	mailingList := strings.Join(req.MailingList, ", ")
+
+	var (
+		out          domain.EngagementStatusUpdate
+		allocationID *string
+		storedList   *string
+		cycle        time.Time
+		createdOn    time.Time
+	)
+	// created_by/updated_by are text audit columns while author_id is a uuid,
+	// so the author cannot be bound to one shared placeholder for both --
+	// Postgres refuses to deduce a single type for it (SQLSTATE 42P08).
+	err := r.db.QueryRow(ctx, createStatusUpdateQuery,
+		req.AuthorID, req.EngagementID, req.AllocationID, req.AuthorID,
+		req.Subject, req.Content, cycleStart, mailingList,
+	).Scan(&out.ID, &out.EngagementID, &allocationID, &out.AuthorID, &out.Subject,
+		&out.Content, &out.State, &cycle, &storedList, &createdOn)
+	if err != nil {
+		// A bad engagement_id/author_id/allocation_id trips a foreign key
+		// rather than returning no rows, so it surfaces as a plain error
+		// here; the service validates their shape, and referential failure
+		// is genuinely a 500-class problem for a caller that passed UUIDs
+		// pointing at nothing.
+		return domain.EngagementStatusUpdate{}, fmt.Errorf("create engagement status update: %w", err)
+	}
+
+	out.AllocationID = allocationID
+	out.CycleStartDate = cycle.Format(time.DateOnly)
+	out.CreatedOn = createdOn.Format(time.RFC3339)
+	out.MailingList = req.MailingList
+	return out, nil
+}
+
+// engagementContextQuery also fetches the AUTHOR'S OWN EMAIL, because that is
+// who the notification is addressed to. The ServiceNow original bound its
+// action's "to" input to Status Update Record > Author > Email and its
+// "ccList" to the mailing list, so the author receives the mail and the
+// audience is copied. Reversing those two would change who appears as the
+// primary recipient of every status update.
+const engagementContextQuery = `
+	SELECT COALESCE(e.name, ''), COALESCE(u.name, ''), COALESCE(u.email, '')
+	FROM customer_engagement e
+	LEFT JOIN "user" u ON u.id = $2
+	WHERE e.id = $1`
+
+func (r *engagementAllocationRepo) EngagementContext(ctx context.Context, engagementID, authorID string) (domain.EngagementNotificationContext, error) {
+	var out domain.EngagementNotificationContext
+	err := r.db.QueryRow(ctx, engagementContextQuery, engagementID, authorID).
+		Scan(&out.EngagementName, &out.AuthorName, &out.AuthorEmail)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EngagementNotificationContext{}, &apierror.NotFoundError{Msg: "engagement not found: " + engagementID}
+	}
+	if err != nil {
+		return domain.EngagementNotificationContext{}, fmt.Errorf("engagement context: %w", err)
+	}
+	return out, nil
 }

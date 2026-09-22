@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/service"
 )
 
@@ -51,4 +52,27 @@ func (h *EngagementAllocationHandler) StatusUpdateReminderRecipients(w http.Resp
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// CreateStatusUpdate handles POST /engagement-status-updates — files one
+// weekly engagement status update and, as a side effect, publishes the event
+// csm-notification-service emails out.
+//
+// The port of ServiceNow's SendEmailsOnEngagementStatusUpdateFlow: there the
+// email was a record-created flow bolted onto the table; here it is the
+// documented consequence of this endpoint, so there is one place that decides
+// both what gets stored and who hears about it.
+func (h *EngagementAllocationHandler) CreateStatusUpdate(w http.ResponseWriter, r *http.Request) {
+	var req domain.CreateEngagementStatusUpdateRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	created, err := h.svc.CreateStatusUpdate(r.Context(), req)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(created)
 }
