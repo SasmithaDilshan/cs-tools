@@ -4,9 +4,9 @@
         READ-ONLY. No writes, no updates, no deletes.
 
    Scope: the three u_ tables behind WeeklyAllocationStatusUpdateReminderEmailFlow,
-   which is being ported to operations/csm-scheduled-tasks. None of them are
-   mapped in csm-sync-service today, so all three need a mapping YAML plus a
-   migration before the port has anything to read.
+   ported to this component's allocation_status_update_reminder sub-cron. None
+   of them were mapped in csm-sync-service, so all three needed a mapping YAML
+   plus a migration before the port had anything to read.
 
      u_customer_engagement                       the engagement (u_state gates it)
      u_customer_engagement_allocation_resource   who is allocated, and when
@@ -43,7 +43,7 @@ var TABLES = [
 ];
 
 /* Output budget. Scripts - Background truncates silently; this makes the
-   truncation visible instead. Same guard as 40-case-notification-family.js. */
+   truncation visible instead. Scripts - Background truncates silently. */
 var BUDGET = 60000;
 var used = 0;
 var truncated = false;
