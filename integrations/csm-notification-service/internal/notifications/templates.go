@@ -18,6 +18,7 @@ package notifications
 
 import (
 	_ "embed"
+	"fmt"
 	"html"
 	"regexp"
 	"strconv"
@@ -44,6 +45,9 @@ var severityChangedTemplateRaw string
 
 //go:embed templates/cr_approval_requested.html
 var crApprovalRequestedTemplateRaw string
+
+//go:embed templates/query_hour_threshold.html
+var queryHourThresholdTemplate string
 
 //go:embed templates/cr_plan_date_notice.html
 var crPlanDateNoticeTemplateRaw string
@@ -432,4 +436,81 @@ func RenderCRPlanDateNoticeEmail(d CRPlanDateEmailData) string {
 		"<!-- [CR_LINK] -->", escapeHTML(d.Link),
 	)
 	return replacer.Replace(crPlanDateNoticeTemplate)
+}
+
+// QueryHourThresholdEmailData is what RenderQueryHourThresholdEmail needs.
+// Every field is plain text and is escaped on the way in — unlike the
+// engagement update, nothing here is author-composed HTML.
+type QueryHourThresholdEmailData struct {
+	Subject     string
+	OwnerName   string
+	AccountName string
+	ProjectName string
+	// State is 1 (>=75%), 2 (>=90%) or 3 (>=100%) and selects the wording.
+	State           int
+	TotalQueryHours string
+	ConsumedHours   string
+	RemainingHours  string
+	PercentConsumed float64
+}
+
+// RenderQueryHourThresholdEmail renders the query-hour usage notice.
+//
+// The three messages are ServiceNow's own wording, verbatim, from the inline
+// script in `[WSO2][Query Hour] Usage Notifications - Project`. They are kept
+// word for word on purpose: the recipients have been reading this exact
+// sentence for years, and a port is not the moment to rewrite it.
+//
+// The one thing NOT carried over is the original's behaviour at state 0. Its
+// `internal_message` variable was never declared and never assigned on that
+// path, so the body was built with the literal string "undefined" in it. This
+// renderer has no state-0 case because the publisher never emits one.
+func RenderQueryHourThresholdEmail(d QueryHourThresholdEmailData) string {
+	ownerName := d.OwnerName
+	if ownerName == "" {
+		ownerName = "Account Manager"
+	}
+
+	account := d.AccountName
+	if account == "" {
+		account = "this account"
+	}
+
+	var headline, message string
+	switch d.State {
+	case 3:
+		headline = "Query hours exceeded"
+		message = "Kindly note that, <b>Allocated query support hours are exceeded in " +
+			escapeHTML(account) + "</b>. Therefore, It is advised to start the closure " +
+			"management process or notify customers to repurchase additional subscription hours."
+	case 2:
+		headline = "90% of query hours utilized"
+		message = "Kindly note that, Allocated 90% of query support hours are utilized in " +
+			escapeHTML(account) + ". Query support will be disabled on 100% usage. Therefore, " +
+			"It is advised to start the closure management process or notify customers to " +
+			"repurchase additional subscription hours."
+	default:
+		headline = "75% of query hours utilized"
+		message = "Kindly note that, Allocated 75% of query support hours are utilized in " +
+			escapeHTML(account) + ". Query support will be disabled on 100% usage. Therefore, " +
+			"It is advised to notify customers to repurchase additional subscription hours."
+	}
+
+	// The percentage is a line ServiceNow never showed. It is added because
+	// the table alone makes "why am I getting this now" a subtraction problem.
+	percent := fmt.Sprintf("%.1f%% of the allocated query hours have been consumed.", d.PercentConsumed)
+
+	replacer := strings.NewReplacer(
+		"<!-- [SUBJECT] -->", escapeHTML(d.Subject),
+		"<!-- [HEADLINE] -->", escapeHTML(headline),
+		"<!-- [OWNER_NAME] -->", escapeHTML(ownerName),
+		"<!-- [MESSAGE] -->", message,
+		"<!-- [ACCOUNT] -->", escapeHTML(account),
+		"<!-- [PROJECT] -->", escapeHTML(d.ProjectName),
+		"<!-- [TOTAL] -->", escapeHTML(d.TotalQueryHours),
+		"<!-- [CONSUMED] -->", escapeHTML(d.ConsumedHours),
+		"<!-- [REMAINS] -->", escapeHTML(d.RemainingHours),
+		"<!-- [PERCENT] -->", escapeHTML(percent),
+	)
+	return replacer.Replace(queryHourThresholdTemplate)
 }
