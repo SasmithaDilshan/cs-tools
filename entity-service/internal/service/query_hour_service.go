@@ -37,7 +37,24 @@ const firstRecompute = -1
 
 // defaultSweepLimit caps one scheduled sweep. The sweep is resumable — it
 // orders by staleness — so a cap costs latency, never coverage.
-const defaultSweepLimit = 200
+const defaultSweepLimit = 50
+
+// sweepBudget is how long Sweep keeps starting new projects.
+//
+// Sized against the SERVER'S WRITE DEADLINE, not the request context.
+// server.go sets WriteTimeout to 15s while routes.go wraps the mux in
+// middleware.Timeout(30s), so the connection's write deadline fires FIRST: a
+// sweep that stopped only on ctx.Err() could do 30 seconds of work and then be
+// unable to deliver any of it. Stopping at 10s leaves headroom to serialise
+// and write the partial result inside the 15s the connection actually has.
+//
+// Whatever is left unprocessed stays the stalest, so the next hourly run takes
+// it first. Stopping early costs latency, never coverage.
+//
+// A var, not a const, only so tests can shrink it — the same reason
+// operations/csm-scheduled-tasks/internal/queryhours keeps tokenFetchTimeout a
+// var. Nothing in production reassigns it.
+var sweepBudget = 10 * time.Second
 
 // maxSweepLimit bounds what a caller may ask for in one request, so a typo in
 // the scheduled task's config cannot turn into an unbounded scan.
@@ -310,6 +327,7 @@ func (s *queryHourService) Sweep(ctx context.Context, staleFor time.Duration, li
 			Msg: "staleFor must not be negative"}
 	}
 
+	started := time.Now()
 	cutoff := time.Now().UTC().Add(-staleFor)
 	ids, err := s.repo.StaleProjectIDs(ctx, cutoff, limit)
 	if err != nil {
@@ -318,19 +336,24 @@ func (s *queryHourService) Sweep(ctx context.Context, staleFor time.Duration, li
 
 	out := domain.RecomputeQueryHoursBatchResponse{Requested: len(ids)}
 	for _, id := range ids {
-		// The sweep runs inside an HTTP request, and routes.go wraps the mux
-		// in middleware.Timeout(30s). A long sweep would otherwise keep
-		// calling Recompute with an already-cancelled context, turning every
-		// remaining project into a spurious failure and burning the whole
-		// budget on errors.
+		// Stop on the elapsed budget or a cancelled context, whichever comes
+		// first. The budget is the one that matters: the connection's 15s
+		// write deadline expires long before the request context's 30s, so a
+		// sweep that ran to the context deadline could not deliver its result
+		// at all. See sweepBudget.
 		//
-		// Stopping cleanly instead leaves the unprocessed projects untouched,
-		// so they stay the stalest and the next run picks them up first.
-		// Requested is corrected to what was actually attempted, so a caller
-		// can see the sweep was cut short rather than inferring it.
-		if ctx.Err() != nil {
+		// Stopping cleanly leaves the unprocessed projects untouched, so they
+		// stay the stalest and the next run picks them up first. Requested is
+		// corrected to what was actually attempted, so a caller can see the
+		// sweep was cut short rather than having to infer it.
+		if elapsed := time.Since(started); elapsed > sweepBudget || ctx.Err() != nil {
 			attempted := out.Succeeded + out.Failed
-			slog.WarnContext(ctx, "query-hour sweep stopped early: request deadline reached",
+			reason := "time budget exhausted"
+			if ctx.Err() != nil {
+				reason = "request context cancelled"
+			}
+			slog.WarnContext(ctx, "query-hour sweep stopped early",
+				"reason", reason, "elapsed", elapsed,
 				"succeeded", out.Succeeded, "failed", out.Failed,
 				"notAttempted", len(ids)-attempted)
 			out.Requested = attempted

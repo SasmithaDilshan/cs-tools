@@ -161,8 +161,13 @@ paths:
             type: integer
             minimum: 1
             maximum: 2000
-            default: 200
-          description: Maximum projects to recompute in this sweep.
+            default: 50
+          description: >-
+            Maximum projects to recompute in this sweep. The sweep also stops
+            on its own 10-second budget, sized to finish inside the server's
+            15-second write deadline, so a large limit yields a partial result
+            rather than a failed request. Whatever is skipped stays the stalest
+            and is picked up by the next run.
       responses:
         "200":
           description: The sweep result, including any per-project failures.

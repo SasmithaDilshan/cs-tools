@@ -589,3 +589,58 @@ func TestSweep_StopsCleanlyWhenTheDeadlineIsReached(t *testing.T) {
 type queryHourPublisher struct{ *fakePublisher }
 
 func (queryHourPublisher) Close() {}
+
+// The sweep must finish inside the server's 15s WriteTimeout, not the 30s
+// request context — otherwise it does the work and cannot deliver it. This
+// pins the budget as the binding constraint.
+func TestSweep_BudgetIsInsideTheServerWriteDeadline(t *testing.T) {
+	const serverWriteTimeout = 15 * time.Second // entity-service/internal/server/server.go
+	if sweepBudget >= serverWriteTimeout {
+		t.Fatalf("sweepBudget %v must leave headroom inside the %v write deadline",
+			sweepBudget, serverWriteTimeout)
+	}
+	// Enough room left to serialise and write a full batch response.
+	if margin := serverWriteTimeout - sweepBudget; margin < 3*time.Second {
+		t.Fatalf("only %v left to write the response; want at least 3s", margin)
+	}
+}
+
+// A slow project must not let the sweep run past its budget.
+func TestSweep_StopsOnTheTimeBudget(t *testing.T) {
+	// Shrink the budget so the test is fast; restore it afterwards.
+	original := sweepBudget
+	sweepBudget = 40 * time.Millisecond
+	defer func() { sweepBudget = original }()
+
+	repo := &slowRepo{
+		fakeQueryHourRepo: fakeQueryHourRepo{
+			staleIDs:    []string{"a", "b", "c", "d"},
+			consumption: domain.ProjectConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
+		},
+		delay: 25 * time.Millisecond,
+	}
+	got, err := NewQueryHourService(repo, nil, nil, true).Sweep(context.Background(), time.Hour, 10)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	// Two projects consume the budget; the rest must be left for the next run.
+	if got.Requested >= 4 {
+		t.Fatalf("Requested = %d, want fewer than 4 — the budget should have cut it short", got.Requested)
+	}
+	if got.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 — a budget stop is not a per-project failure", got.Failed)
+	}
+}
+
+// slowRepo makes each Consumption call take a fixed time.
+type slowRepo struct {
+	fakeQueryHourRepo
+	delay time.Duration
+}
+
+func (r *slowRepo) Consumption(_ context.Context, projectID string) (domain.ProjectConsumption, error) {
+	time.Sleep(r.delay)
+	c := r.fakeQueryHourRepo.consumption
+	c.ProjectID = projectID
+	return c, nil
+}
