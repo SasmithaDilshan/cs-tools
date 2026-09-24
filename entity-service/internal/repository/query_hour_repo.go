@@ -25,6 +25,7 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
@@ -217,10 +218,25 @@ func (r *queryHourRepo) Consumption(ctx context.Context, projectID string) (doma
 	err = r.db.QueryRow(ctx, entitlementHoursSQL, projectID).Scan(
 		&hours, &unmatched, &activeLines, &devSupportHours)
 	if err != nil {
-		// The opportunity tables may not exist yet on a database where
-		// csm-sync-service migration 0080 has not been applied. Degrade to
-		// ServiceNow's synced figure rather than failing the recompute.
-		slog.Warn("query hours: entitlement lines unavailable, falling back to the synced ServiceNow figure",
+		// ONLY "relation does not exist" may be degraded. The fallback exists
+		// for a database where csm-sync-service migration 0080 has not been
+		// applied yet — a permanent, structural condition.
+		//
+		// Swallowing every error here would be far worse than it looks: a
+		// cancelled context, a dropped connection or a statement timeout would
+		// silently substitute ServiceNow's figure, which can differ from the
+		// derived one. That changes the computed state, pushes a different
+		// totalQueryTime to Choreo, and can publish a threshold email — and
+		// the next sweep, succeeding, flips it all back. One transient blip
+		// would cost a false push and two emails.
+		// Literal SQLSTATE with a comment, matching problem_repo.go and
+		// case_repo.go rather than pulling in pgerrcode for one constant.
+		pgErr := (*pgconn.PgError)(nil)
+		if !errors.As(err, &pgErr) || pgErr.Code != "42P01" { // undefined_table
+			return domain.ProjectConsumption{}, fmt.Errorf(
+				"deriving query-hour entitlement for project %s: %w", projectID, err)
+		}
+		slog.Warn("query hours: opportunity tables absent (migration 0080 not applied), falling back to the synced ServiceNow figure",
 			"projectId", projectID, "error", err)
 		c.EntitlementMinutes = c.SyncedEntitlementMinutes
 		c.EntitlementSource = domain.EntitlementSourceServiceNow

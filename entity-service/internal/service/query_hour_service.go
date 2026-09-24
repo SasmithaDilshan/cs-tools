@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -28,6 +29,11 @@ import (
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/events"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/repository"
 )
+
+// firstRecompute is the previousState sentinel for a project with no stored
+// position yet. Distinct from state 0 ("computed, below every threshold"),
+// which is a real state that a later crossing can rise from.
+const firstRecompute = -1
 
 // defaultSweepLimit caps one scheduled sweep. The sweep is resumable — it
 // orders by staleness — so a cap costs latency, never coverage.
@@ -78,12 +84,26 @@ type queryHourService struct {
 	// position is still recomputed and stored and only the email is skipped —
 	// the same convention as engagementAllocationService.publisher.
 	publisher EventPublisherService
+	// notificationsEnabled gates the threshold email separately from Event
+	// Hub. Off by default: see config.QueryHourNotificationsEnabled for why
+	// the Choreo kill switch alone was not enough.
+	notificationsEnabled bool
 }
 
 // NewQueryHourService constructs a QueryHourService. notifier may be nil —
 // see SubscriptionClosureNotifier.
-func NewQueryHourService(repo repository.QueryHourRepository, notifier SubscriptionClosureNotifier, publisher EventPublisherService) QueryHourService {
-	return &queryHourService{repo: repo, notifier: notifier, publisher: publisher}
+func NewQueryHourService(
+	repo repository.QueryHourRepository,
+	notifier SubscriptionClosureNotifier,
+	publisher EventPublisherService,
+	notificationsEnabled bool,
+) QueryHourService {
+	return &queryHourService{
+		repo:                 repo,
+		notifier:             notifier,
+		publisher:            publisher,
+		notificationsEnabled: notificationsEnabled,
+	}
 }
 
 // QueryHourStateFor maps percent-consumed to ServiceNow's u_query_hour_state.
@@ -120,11 +140,21 @@ func (s *queryHourService) Recompute(ctx context.Context, projectID string) (dom
 	}
 
 	// The previous state is read before the recompute so StateChanged can be
-	// reported. A missing row is not an error here: it just means this is the
-	// project's first recompute.
-	previousState := -1
+	// reported, and so a first computation can be told apart from a real
+	// crossing.
+	//
+	// ONLY a NotFoundError may be swallowed here. Treating every error as
+	// "no previous state" would make a timeout or a dropped connection look
+	// like a first recompute, which re-notifies a project already sitting at
+	// its current state and reports StateChanged=false for a real move.
+	previousState := firstRecompute
 	if prev, err := s.repo.Get(ctx, projectID); err == nil {
 		previousState = prev.QueryHourState
+	} else {
+		var nfe *apierror.NotFoundError
+		if !errors.As(err, &nfe) {
+			return domain.RecomputeQueryHoursResponse{}, err
+		}
 	}
 
 	consumption, err := s.repo.Consumption(ctx, projectID)
@@ -174,8 +204,17 @@ func (s *queryHourService) Recompute(ctx context.Context, projectID string) (dom
 	// ServiceNow built an email for it anyway, with the literal word
 	// "undefined" in the body, because its `internal_message` variable was
 	// never assigned on that path.
-	if state > previousState && state >= domain.QueryHourStateWarning {
+	//
+	// A FIRST computation is never a crossing. Without this guard the very
+	// first sweep after deploy would email the owners and the cc groups for
+	// every project already past 75% — notices ServiceNow has already sent.
+	// The first recompute records a baseline silently; the second one onwards
+	// can notify.
+	if previousState != firstRecompute && state > previousState && state >= domain.QueryHourStateWarning {
 		s.publishThresholdReached(ctx, projectID, state, previousState, consumption, stored)
+	} else if previousState == firstRecompute && state >= domain.QueryHourStateWarning {
+		slog.InfoContext(ctx, "query hours: first computation recorded as a baseline, not notified",
+			"projectId", projectID, "state", state)
 	}
 
 	// Push only when the state Choreo last accepted differs from the current
@@ -279,6 +318,24 @@ func (s *queryHourService) Sweep(ctx context.Context, staleFor time.Duration, li
 
 	out := domain.RecomputeQueryHoursBatchResponse{Requested: len(ids)}
 	for _, id := range ids {
+		// The sweep runs inside an HTTP request, and routes.go wraps the mux
+		// in middleware.Timeout(30s). A long sweep would otherwise keep
+		// calling Recompute with an already-cancelled context, turning every
+		// remaining project into a spurious failure and burning the whole
+		// budget on errors.
+		//
+		// Stopping cleanly instead leaves the unprocessed projects untouched,
+		// so they stay the stalest and the next run picks them up first.
+		// Requested is corrected to what was actually attempted, so a caller
+		// can see the sweep was cut short rather than inferring it.
+		if ctx.Err() != nil {
+			attempted := out.Succeeded + out.Failed
+			slog.WarnContext(ctx, "query-hour sweep stopped early: request deadline reached",
+				"succeeded", out.Succeeded, "failed", out.Failed,
+				"notAttempted", len(ids)-attempted)
+			out.Requested = attempted
+			return out, nil
+		}
 		// One project's failure must not abandon the rest of the sweep: the
 		// next run would hit the same project first (it stays stalest) and
 		// stall forever. Record and continue.
@@ -316,6 +373,11 @@ func (s *queryHourService) publishThresholdReached(
 	consumption domain.ProjectConsumption,
 	stored domain.ProjectQueryHours,
 ) {
+	if !s.notificationsEnabled {
+		slog.InfoContext(ctx, "query-hour threshold reached but notifications are disabled; nothing emailed",
+			"projectId", projectID, "state", state, "previousState", previousState)
+		return
+	}
 	if s.publisher == nil {
 		slog.WarnContext(ctx, "no event publisher configured; query-hour threshold reached but not emailed",
 			"projectId", projectID, "state", state)

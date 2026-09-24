@@ -131,7 +131,10 @@ cleanup() {
 trap on_exit EXIT INT TERM
 
 q()  { $PGBIN/psql -h 127.0.0.1 -p $PGPORT -U postgres -d csm -t -A "$@" }
-qq() { $PGBIN/psql -h 127.0.0.1 -p $PGPORT -U postgres -d csm -v ON_ERROR_STOP=1 -q "$@" }
+# -1 wraps each file in a single transaction, so a DDL failure partway through
+# rolls the whole file back rather than leaving half a migration applied. The
+# compose migration runner already does this; this script now matches it.
+qq() { $PGBIN/psql -h 127.0.0.1 -p $PGPORT -U postgres -d csm -v ON_ERROR_STOP=1 -1 -q "$@" }
 
 # A previous aborted run can leave the ports held, which makes the service
 # die instantly with "address already in use" and look like a build failure.

@@ -155,7 +155,7 @@ func TestRecompute_NoEntitlementIsZeroPercentNotADivideByZero(t *testing.T) {
 	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
 		ProjectID: "p1", EntitlementMinutes: 0, BillableMinutes: 600,
 	}}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -186,7 +186,7 @@ func TestRecompute_StateWalksBackDownWhenConsumptionDrops(t *testing.T) {
 		},
 	}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -211,7 +211,7 @@ func TestRecompute_OverrunReportsNegativeRemaining(t *testing.T) {
 		ProjectID: "p1", EntitlementMinutes: 6000,
 		BillableMinutes: 7000, NonBillableMinutes: 500,
 	}}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -241,7 +241,7 @@ func TestRecompute_DoesNotRePushWhenStateUnchanged(t *testing.T) {
 		},
 	}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -269,7 +269,7 @@ func TestRecompute_RetriesPushAfterEarlierFailure(t *testing.T) {
 		},
 	}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	if _, err := svc.Recompute(context.Background(), "p1"); err != nil {
 		t.Fatalf("Recompute: %v", err)
@@ -290,7 +290,7 @@ func TestRecompute_PushFailureDoesNotFailTheCall(t *testing.T) {
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
 	notifier := &fakeNotifier{err: errors.New("choreo 503")}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -316,7 +316,7 @@ func TestRecompute_SkipsPushWhenProjectHasNoSalesforceID(t *testing.T) {
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -337,7 +337,7 @@ func TestRecompute_NilNotifierStillRecords(t *testing.T) {
 		ProjectID: "p1", ProjectSFID: "sf1",
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	got, err := svc.Recompute(context.Background(), "p1")
 	if err != nil {
@@ -359,7 +359,7 @@ func TestRecompute_PushPayloadMatchesServiceNowShape(t *testing.T) {
 		EntitlementMinutes: 12600, BillableMinutes: 19281,
 	}}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil)
+	svc := NewQueryHourService(repo, notifier, nil, true)
 
 	if _, err := svc.Recompute(context.Background(), "p1"); err != nil {
 		t.Fatalf("Recompute: %v", err)
@@ -381,7 +381,7 @@ func TestRecomputeForTimeCard_ScopesToTheCardsOwnProject(t *testing.T) {
 			ProjectID: "p-owning", EntitlementMinutes: 6000, BillableMinutes: 600,
 		},
 	}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	got, err := svc.RecomputeForTimeCard(context.Background(), "tc1")
 	if err != nil {
@@ -394,7 +394,7 @@ func TestRecomputeForTimeCard_ScopesToTheCardsOwnProject(t *testing.T) {
 
 func TestRecomputeForTimeCard_PropagatesNotFound(t *testing.T) {
 	repo := &fakeQueryHourRepo{timeCardErr: &apierror.NotFoundError{Msg: "time card missing"}}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	_, err := svc.RecomputeForTimeCard(context.Background(), "nope")
 	var nfe *apierror.NotFoundError
@@ -404,7 +404,7 @@ func TestRecomputeForTimeCard_PropagatesNotFound(t *testing.T) {
 }
 
 func TestRecompute_RejectsEmptyProjectID(t *testing.T) {
-	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil)
+	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil, true)
 	_, err := svc.Recompute(context.Background(), "   ")
 	var ve *apierror.ValidationError
 	if !errors.As(err, &ve) {
@@ -424,7 +424,7 @@ func TestSweep_ContinuesPastAFailingProject(t *testing.T) {
 		},
 		failFor: "bad",
 	}
-	svc := NewQueryHourService(repo, nil, nil)
+	svc := NewQueryHourService(repo, nil, nil, true)
 
 	got, err := svc.Sweep(context.Background(), time.Hour, 10)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestSweep_ContinuesPastAFailingProject(t *testing.T) {
 }
 
 func TestSweep_RejectsLimitAboveMaximum(t *testing.T) {
-	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil)
+	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil, true)
 	_, err := svc.Sweep(context.Background(), time.Hour, maxSweepLimit+1)
 	var ve *apierror.ValidationError
 	if !errors.As(err, &ve) {
@@ -449,7 +449,7 @@ func TestSweep_RejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestSweep_RejectsNegativeStaleFor(t *testing.T) {
-	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil)
+	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil, true)
 	_, err := svc.Sweep(context.Background(), -time.Minute, 10)
 	var ve *apierror.ValidationError
 	if !errors.As(err, &ve) {
@@ -471,3 +471,121 @@ func (f *failOnFirstRepo) Consumption(ctx context.Context, projectID string) (do
 	c.ProjectID = projectID
 	return c, nil
 }
+
+// --- review findings, pinned -------------------------------------------
+
+// Any error from Get other than NotFound must propagate. Treating a timeout
+// as "no previous state" would re-notify a project already at its state.
+func TestRecompute_PropagatesNonNotFoundErrorFromGet(t *testing.T) {
+	repo := &fakeQueryHourRepo{
+		getErr: errors.New("connection reset"),
+		consumption: domain.ProjectConsumption{
+			ProjectID: "p1", EntitlementMinutes: 6000, BillableMinutes: 6000,
+		},
+	}
+	_, err := NewQueryHourService(repo, nil, nil, true).Recompute(context.Background(), "p1")
+	if err == nil {
+		t.Fatal("Recompute returned nil, want the transport error propagated")
+	}
+}
+
+// A project with no stored row is a FIRST computation, not a crossing. Without
+// this, the first sweep after deploy emails every project already past 75% —
+// notices ServiceNow has already sent.
+func TestRecompute_FirstComputationIsABaselineAndDoesNotNotify(t *testing.T) {
+	repo := &fakeQueryHourRepo{
+		stored: nil, // no row yet
+		consumption: domain.ProjectConsumption{
+			ProjectID: "p1", ProjectSFID: "sf1",
+			EntitlementMinutes: 6000, BillableMinutes: 6000, // 100% -> state 3
+		},
+	}
+	pub := &fakePublisher{}
+	got, err := NewQueryHourService(repo, nil, queryHourPublisher{pub}, true).Recompute(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Recompute: %v", err)
+	}
+	if got.QueryHourState != domain.QueryHourStateExceeded {
+		t.Fatalf("state = %d, want %d — the position must still be recorded",
+			got.QueryHourState, domain.QueryHourStateExceeded)
+	}
+	if len(pub.sent) != 0 {
+		t.Fatalf("published %d events on a first computation, want 0", len(pub.sent))
+	}
+}
+
+// The second recompute onwards can notify, once a baseline exists.
+func TestRecompute_NotifiesOnceABaselineExists(t *testing.T) {
+	repo := &fakeQueryHourRepo{
+		stored: &domain.ProjectQueryHours{QueryHourState: domain.QueryHourStateNormal},
+		consumption: domain.ProjectConsumption{
+			ProjectID: "p1", ProjectSFID: "sf1",
+			EntitlementMinutes: 6000, BillableMinutes: 4500, // 75% -> state 1
+		},
+	}
+	pub := &fakePublisher{}
+	if _, err := NewQueryHourService(repo, nil, queryHourPublisher{pub}, true).Recompute(context.Background(), "p1"); err != nil {
+		t.Fatalf("Recompute: %v", err)
+	}
+	if len(pub.sent) != 1 {
+		t.Fatalf("published %d events, want 1", len(pub.sent))
+	}
+}
+
+// The notification gate is independent of Event Hub: with it off, a real
+// crossing records and pushes but never emails. This is what makes the
+// parallel run alongside ServiceNow actually silent.
+func TestRecompute_NotificationsDisabledSuppressesTheEmailOnly(t *testing.T) {
+	repo := &fakeQueryHourRepo{
+		stored: &domain.ProjectQueryHours{QueryHourState: domain.QueryHourStateNormal},
+		consumption: domain.ProjectConsumption{
+			ProjectID: "p1", ProjectSFID: "sf1",
+			EntitlementMinutes: 6000, BillableMinutes: 4500,
+		},
+	}
+	pub := &fakePublisher{}
+	notifier := &fakeNotifier{}
+	got, err := NewQueryHourService(repo, notifier, queryHourPublisher{pub}, false).Recompute(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Recompute: %v", err)
+	}
+	if len(pub.sent) != 0 {
+		t.Fatalf("published %d events with notifications disabled, want 0", len(pub.sent))
+	}
+	if notifier.calls != 1 {
+		t.Fatalf("Choreo push calls = %d, want 1 — the gate must not affect the push", notifier.calls)
+	}
+	if got.QueryHourState != domain.QueryHourStateWarning {
+		t.Fatalf("state = %d, want %d — the position must still be recorded",
+			got.QueryHourState, domain.QueryHourStateWarning)
+	}
+}
+
+// A cancelled request context stops the sweep cleanly rather than converting
+// every remaining project into a spurious failure.
+func TestSweep_StopsCleanlyWhenTheDeadlineIsReached(t *testing.T) {
+	repo := &fakeQueryHourRepo{
+		staleIDs:    []string{"a", "b", "c"},
+		consumption: domain.ProjectConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already past the deadline
+
+	got, err := NewQueryHourService(repo, nil, nil, true).Sweep(ctx, time.Hour, 10)
+	if err != nil {
+		t.Fatalf("Sweep returned %v, want a clean partial result", err)
+	}
+	if got.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 — a deadline is not a per-project failure", got.Failed)
+	}
+	if got.Requested != 0 {
+		t.Fatalf("Requested = %d, want 0 attempted", got.Requested)
+	}
+}
+
+// queryHourPublisher adapts the package's fakePublisher to
+// EventPublisherService, which also requires Close. Defined here rather than
+// adding Close to fakePublisher so cr_notice_service_test.go is untouched.
+type queryHourPublisher struct{ *fakePublisher }
+
+func (queryHourPublisher) Close() {}

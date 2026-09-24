@@ -31,8 +31,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectQueryHours'
+        "400":
+          description: Bad request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: No query-hour position recorded for this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /projects/{id}/query-hours/recompute:
     post:
       summary: Recompute one project's query-hour position.
@@ -57,8 +74,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecomputeQueryHoursResponse'
+        "400":
+          description: Bad request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /time-cards/{id}/query-hours/recompute:
     post:
       summary: Recompute the query-hour position of a time card's project.
@@ -82,8 +116,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecomputeQueryHoursResponse'
+        "400":
+          description: Bad request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: Time card not found, or not linked to a project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /query-hours/sweep:
     post:
       summary: Recompute the stalest projects' query-hour positions.
@@ -120,7 +171,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/RecomputeQueryHoursBatchResponse'
         "400":
-          description: Bad request.
+          description: Bad request — staleForMinutes or limit is out of range.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /health:
     get:
       summary: Health check endpoint.
@@ -7700,6 +7762,27 @@ components:
             pushError:
               type: string
               description: Present when a push was attempted or skipped and did not succeed.
+            entitlementSource:
+              type: string
+              enum: [opportunity_lines, servicenow_synced]
+              description: >-
+                Which figure the entitlement came from. `opportunity_lines`
+                means it was derived here from the Salesforce product lines;
+                `servicenow_synced` means it was read from
+                project.total_query_duration because no active line covers
+                today, or the opportunity tables are not present yet.
+            syncedEntitlementMinutes:
+              type: integer
+              description: >-
+                ServiceNow's own figure, reported even when the derived one is
+                used, so the two can be compared during the parallel run.
+            unmatchedLineCount:
+              type: integer
+              description: >-
+                Active product lines whose product name is outside the six the
+                entitlement rule knows, and which therefore contributed zero
+                hours. Non-zero means a pack has been renamed or added and the
+                entitlement is quietly too low.
     RecomputeQueryHoursBatchResponse:
       type: object
       properties:

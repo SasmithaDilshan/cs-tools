@@ -30,9 +30,14 @@ import (
 const DefaultStaleFor = time.Hour
 
 // DefaultLimit caps one run. The sweep is resumable — entity-service orders
-// by staleness — so the cap costs latency, never coverage. 200 projects of
-// aggregate is comfortably inside sweepTimeout.
-const DefaultLimit = 200
+// by staleness — so the cap costs latency, never coverage.
+//
+// Sized against the SERVER's deadline, not this client's: entity-service wraps
+// its mux in middleware.Timeout(30s), and a sweep that outlives it stops early
+// and returns a partial result. 50 projects of aggregate fits comfortably
+// inside 30 seconds; anything left over is still the stalest and is picked up
+// by the next hourly run.
+const DefaultLimit = 50
 
 // Sweeper is the subset of *Client this package depends on.
 type Sweeper interface {

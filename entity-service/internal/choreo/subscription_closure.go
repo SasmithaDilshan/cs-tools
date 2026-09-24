@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,23 +60,69 @@ type Config struct {
 	Timeout time.Duration
 }
 
+// requireSecureURL rejects a base URL that is not https, so an api-key never
+// travels in plaintext. Loopback http is allowed for local development, the
+// same exception operations/csm-scheduled-tasks/internal/httpsec makes.
+func requireSecureURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("parsing URL: %w", err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("must be https (loopback http is allowed for local development), got %q", u.Scheme)
+}
+
+// rejectInsecureRedirects stops Go from replaying this client's api-key to
+// wherever a 3xx names.
+//
+// The default CheckRedirect copies the original request's headers on a
+// redirect, stripping only Authorization, Cookie and WWW-Authenticate when the
+// host changes. A custom header like api-key is NOT in that list, so it would
+// be forwarded to any host a redirect points at — including an http one.
+// Refusing to follow redirects at all is the right call here: the Choreo
+// endpoint is a fixed API, and a redirect from it is a misconfiguration worth
+// surfacing rather than silently chasing.
+func rejectInsecureRedirects(c *http.Client) {
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return fmt.Errorf("refusing to follow a redirect to %q: this client sends an api-key header, which Go would replay to the new host", req.URL.Redacted())
+	}
+}
+
 // NewSubscriptionClosureClient constructs a client. It returns nil when
 // BaseURL is empty, so an unconfigured deployment simply has pushing
 // disabled rather than failing at startup — the recompute still runs and
 // still records its result. Matches the nil-publisher convention used for
 // Event Hub elsewhere in this service.
+//
+// It also returns nil when BaseURL is not https, after logging: a
+// misconfigured URL must not silently downgrade an api-key onto the wire, and
+// failing closed here costs only the outbound push, which is already optional.
 func NewSubscriptionClosureClient(cfg Config) *SubscriptionClosureClient {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil
+	}
+	if err := requireSecureURL(cfg.BaseURL); err != nil {
+		slog.Error("query-hour Choreo push disabled: insecure QUERY_HOUR_CHOREO_BASE_URL", "error", err)
 		return nil
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
+	httpClient := &http.Client{Timeout: timeout}
+	rejectInsecureRedirects(httpClient)
 	return &SubscriptionClosureClient{
 		baseURL: strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
 		apiKey:  strings.TrimSpace(cfg.APIKey),
-		http:    &http.Client{Timeout: timeout},
+		http:    httpClient,
 	}
 }
 

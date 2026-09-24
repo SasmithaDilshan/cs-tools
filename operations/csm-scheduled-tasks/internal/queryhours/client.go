@@ -57,7 +57,7 @@ var tokenFetchTimeout = 10 * time.Second
 
 // sweepTimeout is generous because one sweep recomputes up to `limit`
 // projects server-side, each an aggregate over that project's time cards.
-const sweepTimeout = 4 * time.Minute
+const sweepTimeout = 45 * time.Second
 
 // Config holds this client's configuration.
 type Config struct {
