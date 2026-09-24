@@ -276,7 +276,7 @@ func TestRenderQueryHourThresholdEmail_GreetingAndProjectCell(t *testing.T) {
 	})
 	for _, want := range []string{
 		"Hi Ivan Saverus,",
-		"Intrepidsub - Subscription - Project Key : INTREPIDSUBSUB",
+		"Intrepidsub - Subscription",
 		"Allocated query support hours are exceeded in Intrepid Travel",
 		"100h 0m", "101h 35m", "-1h 35m",
 	} {
@@ -302,4 +302,44 @@ func stringsIndex(h, n string) int {
 		}
 	}
 	return -1
+}
+
+// The confirmed target format, from a real 75% notice. Five columns in this
+// exact order, the greeting, the message, and the sign-off — and nothing the
+// original does not have.
+func TestRenderQueryHourThresholdEmail_MatchesTheConfirmedFormat(t *testing.T) {
+	body := RenderQueryHourThresholdEmail(QueryHourThresholdEmailData{
+		Subject:         "75% of Query Hours Utilized",
+		OwnerName:       "Tissaka Senarath",
+		AccountName:     "CHUV (Lausanne University Hospital)",
+		ProjectName:     "CHUV - Lausanne University Hospital - Evaluation Subscription",
+		ProjectKey:      "CHUVEVAL",
+		State:           1,
+		TotalQueryHours: "10h 0m",
+		ConsumedHours:   "7h 55m",
+		RemainingHours:  "2h 5m",
+		PercentConsumed: 79.17,
+	})
+	for _, want := range []string{
+		"Hi Tissaka Senarath,",
+		"Kindly note that, Allocated 75% of query support hours are utilized in CHUV (Lausanne University Hospital). Query support will be disabled on 100% usage. Therefore, It is advised to notify customers to repurchase additional subscription hours.",
+		"CHUV - Lausanne University Hospital - Evaluation Subscription",
+		"10h 0m", "7h 55m", "2h 5m",
+		"WSO2 Support Administrator",
+	} {
+		if !contains(body, want) {
+			t.Errorf("missing from the rendered email: %q", want)
+		}
+	}
+	// Things the original does NOT contain must not appear.
+	for _, unwanted := range []string{
+		"Project Key :", // the account-level variant's suffix, not this one
+		"% of the allocated query hours have been consumed", // an invention
+		"Opportunities",  // seven-column variant only
+		"Total Consumed", // seven-column variant only
+	} {
+		if contains(body, unwanted) {
+			t.Errorf("rendered email contains %q, which the ServiceNow original does not", unwanted)
+		}
+	}
 }

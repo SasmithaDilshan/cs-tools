@@ -18,7 +18,6 @@ package notifications
 
 import (
 	_ "embed"
-	"fmt"
 	"html"
 	"regexp"
 	"strconv"
@@ -446,9 +445,9 @@ type QueryHourThresholdEmailData struct {
 	OwnerName   string
 	AccountName string
 	ProjectName string
-	// ProjectKey is appended to the project cell as
-	// "<name> - Project Key : <key>", matching the ServiceNow email — the key
-	// is how people actually identify a project in conversation.
+	// ProjectKey is a fallback for the project cell when the name is empty.
+	// It is NOT appended to the name: the project-level ServiceNow email
+	// shows the bare project name.
 	ProjectKey string
 	// State is 1 (>=75%), 2 (>=90%) or 3 (>=100%) and selects the wording.
 	State           int
@@ -465,6 +464,11 @@ type QueryHourThresholdEmailData struct {
 // word for word on purpose: the recipients have been reading this exact
 // sentence for years, and a port is not the moment to rewrite it.
 //
+// The table is the same five columns in the same order — Account, Total Query
+// Hour, Project, Consumed, Remains — and nothing else is added. An earlier cut
+// carried a percent-consumed line; it was removed because the original has no
+// such line and these land next to years of the original.
+//
 // The one thing NOT carried over is the original's behaviour at state 0. Its
 // `internal_message` variable was never declared and never assigned on that
 // path, so the body was built with the literal string "undefined" in it. This
@@ -480,44 +484,38 @@ func RenderQueryHourThresholdEmail(d QueryHourThresholdEmailData) string {
 		account = "this account"
 	}
 
-	var headline, message string
+	// No headline: the ServiceNow original opens straight on the greeting, and
+	// these land next to years of it. This is the one notification in this
+	// package without the shell's headline row, deliberately.
+	var message string
 	switch d.State {
 	case 3:
-		headline = "Query hours exceeded"
 		message = "Kindly note that, <b>Allocated query support hours are exceeded in " +
 			escapeHTML(account) + "</b>. Therefore, It is advised to start the closure " +
 			"management process or notify customers to repurchase additional subscription hours."
 	case 2:
-		headline = "90% of query hours utilized"
 		message = "Kindly note that, Allocated 90% of query support hours are utilized in " +
 			escapeHTML(account) + ". Query support will be disabled on 100% usage. Therefore, " +
 			"It is advised to start the closure management process or notify customers to " +
 			"repurchase additional subscription hours."
 	default:
-		headline = "75% of query hours utilized"
 		message = "Kindly note that, Allocated 75% of query support hours are utilized in " +
 			escapeHTML(account) + ". Query support will be disabled on 100% usage. Therefore, " +
 			"It is advised to notify customers to repurchase additional subscription hours."
 	}
 
-	// The percentage is a line ServiceNow never showed. It is added because
-	// the table alone makes "why am I getting this now" a subtraction problem.
-	percent := fmt.Sprintf("%.1f%% of the allocated query hours have been consumed.", d.PercentConsumed)
-
-	// "Intrepidsub - Subscription - Project Key : INTREPIDSUBSUB", as the
-	// ServiceNow email renders it.
+	// The project cell is the project NAME only. An earlier cut appended
+	// " - Project Key : <key>" after seeing it in a production email, but that
+	// sample came from the ACCOUNT-level notifier (the seven-column variant);
+	// the project-level email this ports shows the bare name. ProjectKey is
+	// still carried on the payload for anyone who needs it.
 	project := d.ProjectName
-	if d.ProjectKey != "" {
-		if project == "" {
-			project = d.ProjectKey
-		} else {
-			project = project + " - Project Key : " + d.ProjectKey
-		}
+	if project == "" {
+		project = d.ProjectKey
 	}
 
 	replacer := strings.NewReplacer(
 		"<!-- [SUBJECT] -->", escapeHTML(d.Subject),
-		"<!-- [HEADLINE] -->", escapeHTML(headline),
 		"<!-- [OWNER_NAME] -->", escapeHTML(ownerName),
 		"<!-- [MESSAGE] -->", message,
 		"<!-- [ACCOUNT] -->", escapeHTML(account),
@@ -525,7 +523,6 @@ func RenderQueryHourThresholdEmail(d QueryHourThresholdEmailData) string {
 		"<!-- [TOTAL] -->", escapeHTML(d.TotalQueryHours),
 		"<!-- [CONSUMED] -->", escapeHTML(d.ConsumedHours),
 		"<!-- [REMAINS] -->", escapeHTML(d.RemainingHours),
-		"<!-- [PERCENT] -->", escapeHTML(percent),
 	)
 	return replacer.Replace(queryHourThresholdTemplate)
 }
