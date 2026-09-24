@@ -149,6 +149,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, service.Even
 				repository.NewQueryHourRepository(db),
 				subscriptionClosureNotifier(cfg),
 				eventPublisher,
+				accessSvc,
 				cfg.QueryHourNotificationsEnabled,
 			))
 	}

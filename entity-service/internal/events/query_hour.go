@@ -72,6 +72,12 @@ type QueryHourThresholdReachedPayload struct {
 	// verbatim: state 1 and 2 name the percentage, state 3 names the account.
 	Subject string `json:"subject"`
 
+	// OwnerName is the account manager's display name, used for the greeting.
+	// ServiceNow read it from account.u_owner and addressed the mail "Hi
+	// <name>,"; without it the email opens "Hi Account Manager," which is
+	// how the first cut of this port read.
+	OwnerName string `json:"ownerName,omitempty"`
+
 	// Recipients is the account manager and technical owner. CcRecipients is
 	// the three standing internal groups, plus one extra address at state 3 —
 	// exactly the routing the ServiceNow script performed inline.

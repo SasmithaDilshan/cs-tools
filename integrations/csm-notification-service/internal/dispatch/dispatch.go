@@ -1344,6 +1344,8 @@ func (d *Dispatcher) handleQueryHourThresholdReached(ctx context.Context, record
 
 	body := notifications.RenderQueryHourThresholdEmail(notifications.QueryHourThresholdEmailData{
 		Subject:         p.Subject,
+		OwnerName:       p.OwnerName,
+		ProjectKey:      p.ProjectKey,
 		AccountName:     p.AccountName,
 		ProjectName:     p.ProjectName,
 		State:           p.State,

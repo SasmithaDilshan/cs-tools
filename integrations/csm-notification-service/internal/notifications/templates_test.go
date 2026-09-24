@@ -258,3 +258,48 @@ func TestRenderCRApprovalRequestedEmail_MissingDetail(t *testing.T) {
 		t.Error("want the fallback context line when neither project nor team is known")
 	}
 }
+
+// The greeting and the project cell must match what ServiceNow sends, since
+// these emails land next to years of the originals.
+func TestRenderQueryHourThresholdEmail_GreetingAndProjectCell(t *testing.T) {
+	body := RenderQueryHourThresholdEmail(QueryHourThresholdEmailData{
+		Subject:         "Query Hour Exceeded in Intrepid Travel",
+		OwnerName:       "Ivan Saverus",
+		AccountName:     "Intrepid Travel",
+		ProjectName:     "Intrepidsub - Subscription",
+		ProjectKey:      "INTREPIDSUBSUB",
+		State:           3,
+		TotalQueryHours: "100h 0m",
+		ConsumedHours:   "101h 35m",
+		RemainingHours:  "-1h 35m",
+		PercentConsumed: 101.58,
+	})
+	for _, want := range []string{
+		"Hi Ivan Saverus,",
+		"Intrepidsub - Subscription - Project Key : INTREPIDSUBSUB",
+		"Allocated query support hours are exceeded in Intrepid Travel",
+		"100h 0m", "101h 35m", "-1h 35m",
+	} {
+		if !contains(body, want) {
+			t.Errorf("rendered email is missing %q", want)
+		}
+	}
+	// No owner on file must not produce an empty greeting.
+	fallback := RenderQueryHourThresholdEmail(QueryHourThresholdEmailData{State: 1})
+	if !contains(fallback, "Hi Account Manager,") {
+		t.Error("with no owner name, the greeting should fall back to \"Hi Account Manager,\"")
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && stringsIndex(haystack, needle) >= 0
+}
+
+func stringsIndex(h, n string) int {
+	for i := 0; i+len(n) <= len(h); i++ {
+		if h[i:i+len(n)] == n {
+			return i
+		}
+	}
+	return -1
+}

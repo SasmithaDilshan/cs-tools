@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -97,6 +98,11 @@ const internalEmailDomain = "@wso2.com"
 type queryHourService struct {
 	repo     repository.QueryHourRepository
 	notifier SubscriptionClosureNotifier
+	// access scopes every by-id read and write. The project id arrives from
+	// the request path, so unlike the scoped list endpoints — which fold the
+	// scope into their WHERE clause — it needs an explicit check, exactly as
+	// ProjectStatsService does for its own by-id stats read.
+	access AccessService
 	// publisher is nil when Event Hub is not configured, in which case the
 	// position is still recomputed and stored and only the email is skipped —
 	// the same convention as engagementAllocationService.publisher.
@@ -113,14 +119,57 @@ func NewQueryHourService(
 	repo repository.QueryHourRepository,
 	notifier SubscriptionClosureNotifier,
 	publisher EventPublisherService,
+	access AccessService,
 	notificationsEnabled bool,
 ) QueryHourService {
 	return &queryHourService{
 		repo:                 repo,
 		notifier:             notifier,
 		publisher:            publisher,
+		access:               access,
 		notificationsEnabled: notificationsEnabled,
 	}
+}
+
+// requireProjectAccess rejects a caller who may not see this project.
+//
+// An unrestricted (internal) caller passes. Everyone else must have the
+// project in their resolved scope — for an EXTERNAL customer that is the set
+// of projects they are a REGISTERED project_contact of.
+//
+// The refusal is a NotFoundError, not Forbidden: telling an outsider that a
+// project id exists but is off-limits is itself a disclosure, and every by-id
+// read here would otherwise become a membership oracle. Callers who legitimately
+// hold the id see no difference.
+func (s *queryHourService) requireProjectAccess(ctx context.Context, projectID string) error {
+	scope, err := s.access.ResolveScope(ctx)
+	if err != nil {
+		return err
+	}
+	if scope.Unrestricted {
+		return nil
+	}
+	for _, id := range scope.ProjectIDs {
+		if id == projectID {
+			return nil
+		}
+	}
+	return &apierror.NotFoundError{Msg: fmt.Sprintf("project %s not found", projectID)}
+}
+
+// requireInternalCaller gates the sweep. It has no single project to scope
+// against — it recomputes whatever is stalest across the estate and pushes to
+// Choreo — so it is restricted to allow-listed internal services, the same
+// treatment onboardingStepService gives its own estate-wide operations.
+func (s *queryHourService) requireInternalCaller(ctx context.Context) error {
+	scope, err := s.access.ResolveScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !scope.Unrestricted {
+		return &apierror.ForbiddenError{Msg: "the query-hour sweep is only available to internal services"}
+	}
+	return nil
 }
 
 // QueryHourStateFor maps percent-consumed to ServiceNow's u_query_hour_state.
@@ -154,6 +203,9 @@ func (s *queryHourService) Recompute(ctx context.Context, projectID string) (dom
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return domain.RecomputeQueryHoursResponse{}, &apierror.ValidationError{Msg: "projectId is required"}
+	}
+	if err := s.requireProjectAccess(ctx, projectID); err != nil {
+		return domain.RecomputeQueryHoursResponse{}, err
 	}
 
 	// The previous state is read before the recompute so StateChanged can be
@@ -294,6 +346,14 @@ func (s *queryHourService) RecomputeForTimeCard(ctx context.Context, timeCardID 
 	if err != nil {
 		return domain.RecomputeQueryHoursResponse{}, err
 	}
+	// Scoped on the resolved PROJECT, not the time card: the card is only a
+	// route to it, and Recompute re-checks anyway. Checking here as well keeps
+	// the refusal a NotFound on the time card's own id rather than leaking
+	// which project it belongs to.
+	if err := s.requireProjectAccess(ctx, projectID); err != nil {
+		return domain.RecomputeQueryHoursResponse{}, &apierror.NotFoundError{
+			Msg: fmt.Sprintf("time card %s not found", timeCardID)}
+	}
 	// Scoped to the time card's OWN project. ServiceNow's flow instead looked
 	// every project under the case's ACCOUNT up (max 1000) and recomputed all
 	// of them on every approval; that fan-out is not reproduced.
@@ -305,6 +365,9 @@ func (s *queryHourService) Get(ctx context.Context, projectID string) (domain.Pr
 	if projectID == "" {
 		return domain.ProjectQueryHours{}, &apierror.ValidationError{Msg: "projectId is required"}
 	}
+	if err := s.requireProjectAccess(ctx, projectID); err != nil {
+		return domain.ProjectQueryHours{}, err
+	}
 	q, err := s.repo.Get(ctx, projectID)
 	if err != nil {
 		return domain.ProjectQueryHours{}, err
@@ -315,6 +378,9 @@ func (s *queryHourService) Get(ctx context.Context, projectID string) (domain.Pr
 }
 
 func (s *queryHourService) Sweep(ctx context.Context, staleFor time.Duration, limit int) (domain.RecomputeQueryHoursBatchResponse, error) {
+	if err := s.requireInternalCaller(ctx); err != nil {
+		return domain.RecomputeQueryHoursBatchResponse{}, err
+	}
 	if limit <= 0 {
 		limit = defaultSweepLimit
 	}
@@ -469,6 +535,7 @@ func (s *queryHourService) publishThresholdReached(
 		ConsumedMinutes:    stored.ConsumedMinutes,
 		RemainingMinutes:   stored.RemainingMinutes,
 		PercentConsumed:    stored.PercentConsumed,
+		OwnerName:          nctx.AccountManagerName,
 		Subject:            subject,
 		Recipients:         to,
 		CcRecipients:       cc,

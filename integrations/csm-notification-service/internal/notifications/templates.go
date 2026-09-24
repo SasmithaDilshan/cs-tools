@@ -446,6 +446,10 @@ type QueryHourThresholdEmailData struct {
 	OwnerName   string
 	AccountName string
 	ProjectName string
+	// ProjectKey is appended to the project cell as
+	// "<name> - Project Key : <key>", matching the ServiceNow email — the key
+	// is how people actually identify a project in conversation.
+	ProjectKey string
 	// State is 1 (>=75%), 2 (>=90%) or 3 (>=100%) and selects the wording.
 	State           int
 	TotalQueryHours string
@@ -500,13 +504,24 @@ func RenderQueryHourThresholdEmail(d QueryHourThresholdEmailData) string {
 	// the table alone makes "why am I getting this now" a subtraction problem.
 	percent := fmt.Sprintf("%.1f%% of the allocated query hours have been consumed.", d.PercentConsumed)
 
+	// "Intrepidsub - Subscription - Project Key : INTREPIDSUBSUB", as the
+	// ServiceNow email renders it.
+	project := d.ProjectName
+	if d.ProjectKey != "" {
+		if project == "" {
+			project = d.ProjectKey
+		} else {
+			project = project + " - Project Key : " + d.ProjectKey
+		}
+	}
+
 	replacer := strings.NewReplacer(
 		"<!-- [SUBJECT] -->", escapeHTML(d.Subject),
 		"<!-- [HEADLINE] -->", escapeHTML(headline),
 		"<!-- [OWNER_NAME] -->", escapeHTML(ownerName),
 		"<!-- [MESSAGE] -->", message,
 		"<!-- [ACCOUNT] -->", escapeHTML(account),
-		"<!-- [PROJECT] -->", escapeHTML(d.ProjectName),
+		"<!-- [PROJECT] -->", escapeHTML(project),
 		"<!-- [TOTAL] -->", escapeHTML(d.TotalQueryHours),
 		"<!-- [CONSUMED] -->", escapeHTML(d.ConsumedHours),
 		"<!-- [REMAINS] -->", escapeHTML(d.RemainingHours),

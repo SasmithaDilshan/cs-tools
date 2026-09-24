@@ -429,6 +429,9 @@ type QueryHourThresholdReachedPayload struct {
 	RemainingMinutes   int     `json:"remainingMinutes"`
 	PercentConsumed    float64 `json:"percentConsumed"`
 
+	// OwnerName is the account manager's display name, for the greeting.
+	OwnerName string `json:"ownerName,omitempty"`
+
 	Subject string `json:"subject"`
 
 	Recipients   []string `json:"recipients"`

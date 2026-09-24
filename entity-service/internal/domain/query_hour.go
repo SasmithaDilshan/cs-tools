@@ -177,6 +177,10 @@ type QueryHourNotificationContext struct {
 	ProjectName         string
 	AccountManagerEmail string
 	TechnicalOwnerEmail string
+	// AccountManagerName is the greeting's subject. Empty when the account has
+	// no owner on file, in which case the email falls back to a generic
+	// salutation rather than omitting it.
+	AccountManagerName string
 }
 
 // FormatHoursMinutes renders a minute count as ServiceNow rendered it —

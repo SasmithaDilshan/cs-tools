@@ -411,7 +411,8 @@ const notificationContextSQL = `
 SELECT COALESCE(a.name, ''),
        COALESCE(p.name, ''),
        COALESCE(am.email, ''),
-       COALESCE(towner.email, '')
+       COALESCE(towner.email, ''),
+       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', am.first_name, am.last_name)), ''), '')
   FROM project p
   LEFT JOIN account a      ON a.id = p.account_id
   LEFT JOIN "user" am      ON am.id = a.account_manager_id
@@ -421,7 +422,8 @@ SELECT COALESCE(a.name, ''),
 func (r *queryHourRepo) NotificationContext(ctx context.Context, projectID string) (domain.QueryHourNotificationContext, error) {
 	var c domain.QueryHourNotificationContext
 	err := r.db.QueryRow(ctx, notificationContextSQL, projectID).Scan(
-		&c.AccountName, &c.ProjectName, &c.AccountManagerEmail, &c.TechnicalOwnerEmail)
+		&c.AccountName, &c.ProjectName, &c.AccountManagerEmail, &c.TechnicalOwnerEmail,
+		&c.AccountManagerName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.QueryHourNotificationContext{}, &apierror.NotFoundError{
 			Msg: fmt.Sprintf("project %s not found", projectID)}
