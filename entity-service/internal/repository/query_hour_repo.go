@@ -41,10 +41,14 @@ type QueryHourRepository interface {
 	// Consumption aggregates one project's approved time cards and reads its
 	// entitlement. Returns a NotFoundError if no project row has that id.
 	Consumption(ctx context.Context, projectID string) (domain.QueryHourConsumption, error)
-	// Upsert writes the computed position and returns it as stored.
+	// Upsert writes the computed position and returns it as stored, together
+	// with the state it replaced — nil when the project had no row, i.e. this
+	// is its first computation. The previous state is reported from inside
+	// the same statement so a concurrent recompute cannot also observe it and
+	// publish a duplicate threshold notice; see upsertSQL.
 	// lastPushedState/lastPushedAt are preserved, never overwritten here —
 	// MarkPushed owns those.
-	Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, error)
+	Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, *int, error)
 	// MarkPushed records that Choreo accepted `state` for this project.
 	MarkPushed(ctx context.Context, projectID string, state int, at time.Time) error
 	// Get returns the stored position without recomputing it.
@@ -262,26 +266,59 @@ func (r *queryHourRepo) Consumption(ctx context.Context, projectID string) (doma
 	return c, nil
 }
 
+// upsertSQL writes the computed position AND reports the state it replaced, in
+// one statement.
+//
+// The previous state has to come from here rather than a separate read. The
+// caller publishes a threshold notice when the state crosses upward, and a
+// read-then-write pair lets two concurrent recomputes — the hourly sweep and a
+// time-card-triggered one for the same project — both observe the old state,
+// both conclude they caused the crossing, and both publish. The owners and the
+// standing cc groups would receive the same notice twice, which is precisely
+// the double send this cutover exists to prevent.
+//
+// `prev` is safe to read alongside the insert: PostgreSQL guarantees that
+// sub-statements in a WITH clause cannot see one another's effects on the
+// target table, so it always reports the row as it was before this statement,
+// regardless of the order the planner runs them in. FOR UPDATE then serialises
+// concurrent callers on an existing row, so the second one reads the first's
+// committed state rather than the stale one.
+//
+// When no row exists, `prev` is empty and previous_state comes back NULL. Both
+// racers on a genuinely new project therefore see "first computation", and the
+// service stays silent for it by design — so that case cannot double-send
+// either.
 const upsertSQL = `
-INSERT INTO project_query_hours (
-    project_id, entitlement_minutes, consumed_minutes,
-    billable_minutes, non_billable_minutes, query_hour_state,
-    computed_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-ON CONFLICT (project_id) DO UPDATE SET
-    entitlement_minutes  = EXCLUDED.entitlement_minutes,
-    consumed_minutes     = EXCLUDED.consumed_minutes,
-    billable_minutes     = EXCLUDED.billable_minutes,
-    non_billable_minutes = EXCLUDED.non_billable_minutes,
-    query_hour_state     = EXCLUDED.query_hour_state,
-    computed_at          = NOW(),
-    updated_at           = NOW()
-RETURNING project_id::text, entitlement_minutes, consumed_minutes,
-          billable_minutes, non_billable_minutes, query_hour_state,
-          last_pushed_state, last_pushed_at, computed_at`
+WITH prev AS (
+    SELECT query_hour_state
+      FROM project_query_hours
+     WHERE project_id = $1
+       FOR UPDATE
+),
+up AS (
+    INSERT INTO project_query_hours (
+        project_id, entitlement_minutes, consumed_minutes,
+        billable_minutes, non_billable_minutes, query_hour_state,
+        computed_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+    ON CONFLICT (project_id) DO UPDATE SET
+        entitlement_minutes  = EXCLUDED.entitlement_minutes,
+        consumed_minutes     = EXCLUDED.consumed_minutes,
+        billable_minutes     = EXCLUDED.billable_minutes,
+        non_billable_minutes = EXCLUDED.non_billable_minutes,
+        query_hour_state     = EXCLUDED.query_hour_state,
+        computed_at          = NOW(),
+        updated_at           = NOW()
+    RETURNING project_id::text, entitlement_minutes, consumed_minutes,
+              billable_minutes, non_billable_minutes, query_hour_state,
+              last_pushed_state, last_pushed_at, computed_at
+)
+SELECT up.*, (SELECT query_hour_state FROM prev) AS previous_state
+  FROM up`
 
-func (r *queryHourRepo) Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, error) {
+func (r *queryHourRepo) Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, *int, error) {
 	var q domain.ProjectQueryHours
+	var previousState *int
 	err := r.db.QueryRow(ctx, upsertSQL,
 		c.ProjectID, c.EntitlementMinutes, c.ConsumedMinutes(),
 		c.BillableMinutes, c.NonBillableMinutes, state,
@@ -289,13 +326,14 @@ func (r *queryHourRepo) Upsert(ctx context.Context, c domain.QueryHourConsumptio
 		&q.ProjectID, &q.EntitlementMinutes, &q.ConsumedMinutes,
 		&q.BillableMinutes, &q.NonBillableMinutes, &q.QueryHourState,
 		&q.LastPushedState, &q.LastPushedAt, &q.ComputedAt,
+		&previousState,
 	)
 	if err != nil {
-		return domain.ProjectQueryHours{}, fmt.Errorf("upserting query hours for project %s: %w", c.ProjectID, err)
+		return domain.ProjectQueryHours{}, nil, fmt.Errorf("upserting query hours for project %s: %w", c.ProjectID, err)
 	}
 	q.ProjectKey = c.ProjectKey
 	q.ProjectSFID = c.ProjectSFID
-	return q, nil
+	return q, previousState, nil
 }
 
 func (r *queryHourRepo) MarkPushed(ctx context.Context, projectID string, state int, at time.Time) error {

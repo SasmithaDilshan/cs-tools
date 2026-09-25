@@ -177,6 +177,10 @@ paths:
                 $ref: '#/components/schemas/RecomputeQueryHoursBatchResponse'
         "400":
           description: Bad request — staleForMinutes or limit is out of range.
+        "403":
+          description: >-
+            The caller is not an internal service. The sweep has no single
+            project to scope to, so it is restricted rather than filtered.
           content:
             application/json:
               schema:
