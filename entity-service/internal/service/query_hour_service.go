@@ -19,7 +19,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -157,7 +156,8 @@ func (s *queryHourService) requireProjectAccess(ctx context.Context, projectID s
 	return &apierror.NotFoundError{Msg: fmt.Sprintf("project %s not found", projectID)}
 }
 
-// requireInternalCaller gates the sweep. It has no single project to scope
+// requireInternalCaller gates the estate-wide operations — the sweep and the
+// weekly report. Neither has a single project to scope
 // against — it recomputes whatever is stalest across the estate and pushes to
 // Choreo — so it is restricted to allow-listed internal services, the same
 // treatment onboardingStepService gives its own estate-wide operations.
@@ -167,7 +167,7 @@ func (s *queryHourService) requireInternalCaller(ctx context.Context) error {
 		return err
 	}
 	if !scope.Unrestricted {
-		return &apierror.ForbiddenError{Msg: "the query-hour sweep is only available to internal services"}
+		return &apierror.ForbiddenError{Msg: "this query-hour operation is only available to internal services"}
 	}
 	return nil
 }
@@ -204,26 +204,18 @@ func (s *queryHourService) Recompute(ctx context.Context, projectID string) (dom
 	if projectID == "" {
 		return domain.RecomputeQueryHoursResponse{}, &apierror.ValidationError{Msg: "projectId is required"}
 	}
-	if err := s.requireProjectAccess(ctx, projectID); err != nil {
+	// Before the access check, not after: a malformed id is the caller's
+	// mistake and deserves a 400. Left to reach Postgres it becomes "invalid
+	// input syntax for type uuid" and surfaces as a 500, which reads as our
+	// fault rather than theirs. This is the repository convention
+	// (CLAUDE.md, "Service conventions") applied to the one path that skipped
+	// it — requireProjectAccess returns early for an unrestricted caller and
+	// never inspects the id's shape.
+	if err := validateUUIDs("projectId", []string{projectID}); err != nil {
 		return domain.RecomputeQueryHoursResponse{}, err
 	}
-
-	// The previous state is read before the recompute so StateChanged can be
-	// reported, and so a first computation can be told apart from a real
-	// crossing.
-	//
-	// ONLY a NotFoundError may be swallowed here. Treating every error as
-	// "no previous state" would make a timeout or a dropped connection look
-	// like a first recompute, which re-notifies a project already sitting at
-	// its current state and reports StateChanged=false for a real move.
-	previousState := firstRecompute
-	if prev, err := s.repo.Get(ctx, projectID); err == nil {
-		previousState = prev.QueryHourState
-	} else {
-		var nfe *apierror.NotFoundError
-		if !errors.As(err, &nfe) {
-			return domain.RecomputeQueryHoursResponse{}, err
-		}
+	if err := s.requireProjectAccess(ctx, projectID); err != nil {
+		return domain.RecomputeQueryHoursResponse{}, err
 	}
 
 	consumption, err := s.repo.Consumption(ctx, projectID)
@@ -235,9 +227,22 @@ func (s *queryHourService) Recompute(ctx context.Context, projectID string) (dom
 	pct := percentConsumed(consumed, consumption.EntitlementMinutes)
 	state := QueryHourStateFor(pct)
 
-	stored, err := s.repo.Upsert(ctx, consumption, state)
+	// The state this replaced comes back from the upsert itself rather than a
+	// separate read. Two recomputes can run for one project at the same time —
+	// the hourly sweep and a time-card-triggered one — and a read-then-write
+	// pair lets both see the same old state, both conclude they caused the
+	// crossing, and both publish. Reporting it from inside the write makes
+	// exactly one of them the one that moved it. See upsertSQL.
+	//
+	// A nil previous state means the project had no row at all: a first
+	// computation, which is deliberately silent (see below).
+	stored, previous, err := s.repo.Upsert(ctx, consumption, state)
 	if err != nil {
 		return domain.RecomputeQueryHoursResponse{}, err
+	}
+	previousState := firstRecompute
+	if previous != nil {
+		previousState = *previous
 	}
 	stored.PercentConsumed = pct
 	stored.RemainingMinutes = consumption.EntitlementMinutes - consumed
@@ -428,7 +433,20 @@ func (s *queryHourService) Sweep(ctx context.Context, staleFor time.Duration, li
 		// One project's failure must not abandon the rest of the sweep: the
 		// next run would hit the same project first (it stays stalest) and
 		// stall forever. Record and continue.
-		res, err := s.Recompute(ctx, id)
+		// Bound ONE project, not just the gap between projects. The loop
+		// already stops when the overall budget is spent, but that check
+		// happens between iterations — a single slow Choreo push inside
+		// Recompute could overrun it by any amount, and the connection's own
+		// write deadline expires well before the request context's, so the
+		// sweep would finish with a result it could no longer deliver.
+		// Whatever remains of the budget is all any one project may have.
+		remaining := sweepBudget - time.Since(started)
+		if remaining <= 0 {
+			continue
+		}
+		projectCtx, cancel := context.WithTimeout(ctx, remaining)
+		res, err := s.Recompute(projectCtx, id)
+		cancel()
 		if err != nil {
 			out.Failed++
 			if out.Errors == nil {

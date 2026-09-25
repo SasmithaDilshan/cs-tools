@@ -17,8 +17,11 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
 )
 
@@ -215,5 +218,58 @@ func TestUnmatchedLines_CountsEachOpportunityOnce(t *testing.T) {
 
 	if got := unmatchedLines([]domain.QueryHoursReportRow{r1, r2, r3}); got != 3 {
 		t.Fatalf("got %d, want 3 (2 from o1 counted once, 1 from o2)", got)
+	}
+}
+
+// The weekly report is the whole estate in one response — every account's
+// entitlement and consumption, plus the people behind each one. A
+// customer-scoped caller has no correct subset of it, so the answer is
+// refusal, not a filtered view.
+func TestWeeklyReport_RefusesANonInternalCaller(t *testing.T) {
+	repo := &fakeQueryHourRepo{reportRows: []domain.QueryHoursReportRow{
+		row("acct", "opp", 600, "proj", 900),
+	}}
+	svc := NewQueryHourService(repo, nil, nil,
+		queryHourScopedAccess{projects: []string{"11111111-1111-1111-1111-111111111111"}}, true)
+
+	_, err := svc.WeeklyReport(context.Background())
+	if err == nil {
+		t.Fatal("a project-scoped caller received the whole estate's consumption report")
+	}
+	var forbidden *apierror.ForbiddenError
+	if !errors.As(err, &forbidden) {
+		t.Fatalf("got %T (%v), want *apierror.ForbiddenError", err, err)
+	}
+}
+
+func TestWeeklyReport_AllowsAnInternalCaller(t *testing.T) {
+	repo := &fakeQueryHourRepo{reportRows: []domain.QueryHoursReportRow{
+		row("acct", "opp", 600, "proj", 900),
+	}}
+	svc := NewQueryHourService(repo, nil, nil, unrestrictedAccess{}, true)
+
+	report, err := svc.WeeklyReport(context.Background())
+	if err != nil {
+		t.Fatalf("internal caller was refused: %v", err)
+	}
+	if report.ExceededCount != 1 {
+		t.Errorf("ExceededCount = %d, want 1", report.ExceededCount)
+	}
+}
+
+// An absent Salesforce mirror yields an empty report, not an error: a
+// deployment without csm-sync-service's tables should mail "nothing is
+// exhausted" rather than fail the task.
+func TestWeeklyReport_EmptyWhenThereAreNoRows(t *testing.T) {
+	svc := NewQueryHourService(&fakeQueryHourRepo{}, nil, nil, unrestrictedAccess{}, true)
+	report, err := svc.WeeklyReport(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report.ExceededCount != 0 || report.GoingToExceedCount != 0 {
+		t.Errorf("counts = %d/%d, want 0/0", report.ExceededCount, report.GoingToExceedCount)
+	}
+	if report.Exceeded == nil || report.GoingToExceed == nil {
+		t.Error("both lists should serialise as [] rather than null")
 	}
 }

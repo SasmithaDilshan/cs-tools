@@ -39,6 +39,7 @@ noted.
 | `EVENT_HUB_BROKER` | No | Kafka bootstrap address. Feature-gates the publisher |
 | `EVENT_HUB_CONNECTION_STRING` | With broker | Namespace SAS connection string |
 | `EVENT_HUB_TOPIC` | With broker | Topic name. **All three must be set together** — `Config.Validate` enforces it, because a broker without a topic makes every publish fail silently while the deployment looks healthy |
+| `AUTH_INTERNAL_CLIENT_IDS` | Yes, in practice | Comma-separated OAuth2 client ids treated as internal services. **The csm-scheduled-tasks client id must be listed here**, or `POST /query-hours/sweep` and `GET /query-hours/weekly-report` return 403 and both the hourly recompute and the weekly report fail every run — the report task reports the failure, but no report is ever sent |
 | `EVENT_PUBLISHING_ENABLED` | No (`false`) | Must be exactly `"true"`. A second, independent kill switch on top of the broker config |
 | `SUPPORT_ENGINEER_ROLE` | No | ServiceNow role that completes a case's response SLA clock |
 | `CUSTOMER_ROLES` | No | Comma-separated roles that mark a customer reply |
@@ -85,6 +86,11 @@ the easiest mistake here:
 | `allocation_status_update_reminder` | `0 0 * * 1` | Failure alerts only — its real audience comes from the data | Reminders still go out; nobody is told if it fails |
 | `query_hour_recompute` | `0 * * * *` | Failure alerts only | Recompute still runs; nobody is told if it fails |
 | `query_hours_weekly_report` | `30 18 * * 0` | **The report's actual audience** | No report sent, and the query is skipped |
+
+Both `query_hour_recompute` and `query_hours_weekly_report` call **internal-only** entity-service
+endpoints. Their OAuth2 client id must appear in entity-service's `AUTH_INTERNAL_CLIENT_IDS` or
+every run fails with a 403 — see that variable's row above. This is the single most likely reason
+for a deployment where the tasks run, the ledger records failures, and nobody receives anything.
 
 **`query_hours_weekly_report`'s schedule is Sunday 18:30 UTC and that is not a typo for Monday.**
 ServiceNow fires it 00:00:05 Monday in `Asia/Colombo`, which *is* 18:30 UTC Sunday. `0 0 * * 1`

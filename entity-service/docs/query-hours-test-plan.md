@@ -19,10 +19,21 @@ not a hand-written schema.
 | HTTP surface | `internal/handler/query_hour_handler.go`, `openapi.yaml` |
 | Hourly sub-cron | `operations/csm-scheduled-tasks/internal/queryhours/` |
 
-`[Query Hour] Update Opportunity Line` is **not** ported: its entitlement
-maths needs `u_sf_opportunity_product` and `u_sf_link_opportunity`, and
-neither table is synced into Postgres. That needs a csm-sync-service job in
-digiops-cs first.
+**The entitlement maths IS ported.** `sf_opportunity`, `sf_opportunity_product`
+and `sf_opportunity_link` are now mirrored into Postgres by csm-sync-service
+(digiops-cs migration 0080), and both `Consumption` and `WeeklyReportRows` in
+`query_hour_repo.go` derive the entitlement from them — quantity x pack size,
+over the lines whose service window covers today. An earlier version of this
+plan said the opposite, from before those tables existed; it was wrong from the
+moment 0080 merged, which matters because it is the paragraph a reader reaches
+for at cutover.
+
+What remains unported from `[Query Hour] Update Opportunity Line` is only its
+**write-side trigger** — ServiceNow recomputes a project the moment an
+opportunity line changes, whereas here the hourly sweep picks it up within the
+hour. On a database without those tables the entitlement degrades to
+ServiceNow's synced figure rather than failing, so a deployment where 0080 has
+not been applied still works, just with the older number.
 
 ## Unit tests
 
@@ -85,7 +96,7 @@ must never be counted.
 
 The port pushes to Choreo Sales Operations. Any server that accepts
 `PUT /subscriptions/{sfId}/closure-state` and returns 2xx will do; the one used
-for this run also exposes `GET /_calls` to read back what it received.
+for this run also exposes `GET /` to read back every push it received.
 
 ### 5. Run it
 

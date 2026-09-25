@@ -3324,6 +3324,11 @@ the csm-flow-service work rather than on this branch:
   one with an exhausted component and a nearly-exhausted one appears in both, and the counts say
   so. That is the original's own rule.
 
+**Internal callers only**, the same gate `Sweep` uses. The response is the whole estate in one
+document — every account's entitlement and consumption, plus the people behind each one — and
+there is no per-project scope that would make a filtered version meaningful, so a scoped caller
+gets a 403 rather than a subset.
+
 `accountManagerEmail`/`technicalOwnerEmail` are **reported, not used for addressing** — ServiceNow
 derived the report's recipients from them; the sub-cron uses its own configured list instead. See
 that component's `CLAUDE.md` for why.

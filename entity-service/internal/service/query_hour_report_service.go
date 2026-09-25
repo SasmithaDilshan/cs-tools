@@ -57,6 +57,16 @@ const goingToExceedFloorMinutes = 600
 // report with zero accounts rather than an error — the caller emails an empty
 // report, which is a true statement about the estate.
 func (s *queryHourService) WeeklyReport(ctx context.Context) (domain.QueryHoursWeeklyReport, error) {
+	// Internal callers only, the same gate the sweep uses and for a stronger
+	// reason. This is the whole estate in one response: every account's
+	// entitlement and consumption, plus the account manager and technical
+	// owner behind each one. There is no per-project scope to filter it down
+	// to — a customer-scoped caller has no correct subset of this report, so
+	// the answer is refusal rather than a filtered view.
+	if err := s.requireInternalCaller(ctx); err != nil {
+		return domain.QueryHoursWeeklyReport{}, err
+	}
+
 	rows, err := s.repo.WeeklyReportRows(ctx)
 	if err != nil {
 		return domain.QueryHoursWeeklyReport{}, err

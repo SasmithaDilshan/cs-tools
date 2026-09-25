@@ -62,6 +62,22 @@ BASE=/tmp/cqh
 PGPORT=55432
 APP_PORT=8091
 CHOREO_PORT=8099
+
+# Every query-hour endpoint resolves the caller's scope, and a request with no
+# credentials at all is rejected -- 401 for the per-project routes, 403 for the
+# sweep, which is internal-only. So the script has to present a credential.
+#
+# x-jwt-assertion is DECODED, never signature-verified (see
+# auth.Validator.ExtractClientID), so a locally minted, unsigned assertion
+# carrying a client_id is enough, and the service is told that client id is
+# internal via AUTH_INTERNAL_CLIENT_IDS. Nothing here weakens the real
+# deployment: it only exercises the same code path a real internal service
+# takes. An earlier version of this script predates the access checks entirely
+# and could not reach any of these endpoints.
+E2E_CLIENT_ID=query-hours-e2e
+b64url() { python3 -c "import base64,sys;sys.stdout.write(base64.urlsafe_b64encode(sys.stdin.buffer.read()).decode().rstrip('='))" }
+E2E_ASSERTION="$(printf '%s' '{"alg":"none","typ":"JWT"}' | b64url).$(printf '%s' "{\"client_id\":\"$E2E_CLIENT_ID\"}" | b64url)."
+AUTH_HEADER="x-jwt-assertion: $E2E_ASSERTION"
 ENTITY_DIR="${0:A:h}/.."
 
 # The five seeded projects (see testdata/query_hours_seed.sql). Declared here
@@ -205,11 +221,12 @@ echo "  built"
   DB_PASSWORD=postgres DB_NAME=csm DB_SSLMODE=disable SERVER_PORT=$APP_PORT \
   QUERY_HOUR_CHOREO_BASE_URL=http://127.0.0.1:$CHOREO_PORT \
   QUERY_HOUR_CHOREO_API_KEY=test-key \
+  AUTH_INTERNAL_CLIENT_IDS=$E2E_CLIENT_ID \
   $BASE/entity-api ) > $BASE/entity.log 2>&1 &
 ENTITY_PID=$!
 B="http://127.0.0.1:$APP_PORT"
 for i in {1..30}; do
-  curl -s -o /dev/null "$B/projects/11111111-1111-1111-1111-111111111111/query-hours" && break
+  curl -s -o /dev/null -H "$AUTH_HEADER" "$B/projects/11111111-1111-1111-1111-111111111111/query-hours" && break
   sleep 1
 done
 sleep 1
@@ -220,7 +237,7 @@ grep -q "started in PORT" $BASE/entity.log && ! grep -q "server error" $BASE/ent
 
 step "6/7  behaviour"
 field() { python3 -c "import json,sys;print(json.load(sys.stdin)['$1'])" }
-recompute() { curl -s -X POST "$B/projects/$1/query-hours/recompute" }
+recompute() { curl -s -X POST -H "$AUTH_HEADER" "$B/projects/$1/query-hours/recompute" }
 
 for spec in "$P1 0 600" "$P2 1 4500" "$P3 2 5400" "$P4 3 7500" "$P5 0 300"; do
   set -- ${=spec}
@@ -247,22 +264,22 @@ qq -c "UPDATE time_card SET analyzing_minutes=3000, setting_up_minutes=0,
 
 # The other divergence: no account-wide fan-out. All five share one account.
 qq -c "UPDATE project_query_hours SET computed_at = NOW() - INTERVAL '10 days';" >/dev/null
-curl -s -X POST "$B/time-cards/dddddddd-0000-0000-0000-000000000002/query-hours/recompute" >/dev/null
+curl -s -X POST -H "$AUTH_HEADER" "$B/time-cards/dddddddd-0000-0000-0000-000000000002/query-hours/recompute" >/dev/null
 moved=$(q -c "SELECT count(*) FROM project_query_hours WHERE computed_at > NOW() - INTERVAL '1 minute';")
 [[ "$moved" == "1" ]] && ok "one time card recomputed exactly 1 of 5 projects" \
                       || bad "recomputed $moved projects, want 1"
 
 # Sweep, then immediately again: nothing left stale.
 qq -c "UPDATE project_query_hours SET computed_at = NOW() - INTERVAL '10 days';" >/dev/null
-s1=$(curl -s -X POST "$B/query-hours/sweep?staleForMinutes=60&limit=50" | field succeeded)
-s2=$(curl -s -X POST "$B/query-hours/sweep?staleForMinutes=60&limit=50" | field requested)
+s1=$(curl -s -X POST -H "$AUTH_HEADER" "$B/query-hours/sweep?staleForMinutes=60&limit=50" | field succeeded)
+s2=$(curl -s -X POST -H "$AUTH_HEADER" "$B/query-hours/sweep?staleForMinutes=60&limit=50" | field requested)
 [[ "$s1" == "5" && "$s2" == "0" ]] && ok "sweep did 5, then 0 (no redundant work)" \
                                    || bad "sweep did $s1 then requested $s2"
 
 # A dead Choreo must not fail the recompute; the next one must retry.
 kill $CHOREO_PID 2>/dev/null; sleep 1
 qq -c "UPDATE time_card SET analyzing_minutes=5700 WHERE id='dddddddd-0000-0000-0000-000000000003';" >/dev/null
-code=$(curl -s -o $BASE/pf.json -w "%{http_code}" -X POST "$B/projects/$P3/query-hours/recompute")
+code=$(curl -s -o $BASE/pf.json -w "%{http_code}" -X POST -H "$AUTH_HEADER" "$B/projects/$P3/query-hours/recompute")
 [[ "$code" == "200" ]] && ok "push failure returns 200, position still stored" \
                        || bad "push failure returned $code"
 [[ $(q -c "SELECT last_pushed_state <> query_hour_state FROM project_query_hours WHERE project_id='$P3';") == "t" ]] \
@@ -279,7 +296,7 @@ for spec in "POST /projects/99999999-9999-9999-9999-999999999999/query-hours/rec
             "POST /query-hours/sweep?limit=0 400" \
             "POST /query-hours/sweep?limit=99999 400"; do
   set -- ${=spec}
-  got=$(curl -s -o /dev/null -w "%{http_code}" -X $1 "$B$2")
+  got=$(curl -s -o /dev/null -w "%{http_code}" -X $1 -H "$AUTH_HEADER" "$B$2")
   [[ "$got" == "$3" ]] && ok "$2 -> $got" || bad "$2 -> $got (want $3)"
 done
 

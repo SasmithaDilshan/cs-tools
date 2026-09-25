@@ -177,6 +177,10 @@ paths:
                 $ref: '#/components/schemas/RecomputeQueryHoursBatchResponse'
         "400":
           description: Bad request — staleForMinutes or limit is out of range.
+        "403":
+          description: >-
+            The caller is not an internal service. The sweep has no single
+            project to scope to, so it is restricted rather than filtered.
           content:
             application/json:
               schema:
@@ -3186,6 +3190,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueryHoursWeeklyReport'
+        "403":
+          description: >-
+            The caller is not an internal service. The report covers the whole
+            estate and every account's owners, and there is no per-project
+            scope to filter it down to, so a scoped caller is refused rather
+            than given a subset.
         "500":
           description: Internal server error.
   /projects/{id}/time-cards/stats:
