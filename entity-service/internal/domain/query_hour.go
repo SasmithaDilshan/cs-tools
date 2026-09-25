@@ -200,3 +200,132 @@ func FormatHoursMinutes(minutes int) string {
 	}
 	return fmt.Sprintf("%s%dh %dm", sign, minutes/60, minutes%60)
 }
+
+// QueryHoursReportRow is one live (account, opportunity, project) funding
+// relationship, exactly as repository.WeeklyReportRows returns it. It is the
+// flat input the weekly report is assembled from, not something a caller
+// ever sees — QueryHoursWeeklyReport is the response shape.
+type QueryHoursReportRow struct {
+	AccountID           string
+	AccountName         string
+	AccountSFID         string
+	AccountManagerEmail string
+	TechnicalOwnerEmail string
+
+	OpportunityID   string
+	OpportunitySFID string
+	OpportunityName string
+	// EntitlementMinutes belongs to the OPPORTUNITY, not to this row's
+	// project: it is the sum over every in-service product line on that
+	// opportunity. The same value therefore repeats across every row sharing
+	// an opportunity, and must be counted once per opportunity, never summed
+	// across rows.
+	EntitlementMinutes int
+	UnmatchedLineCount int
+
+	ProjectID   string
+	ProjectKey  string
+	ProjectName string
+	ProjectSFID string
+	// ConsumedMinutes is the project's approved BILLABLE time. ServiceNow
+	// reports billable only (QueryHourUtils reads summary.total_billable and
+	// discards the non-billable sum it computes alongside), and that is
+	// reproduced here — the weekly report measures what counts against the
+	// entitlement, not total effort.
+	ConsumedMinutes int
+}
+
+// QueryHoursReportProject is one project cell in the report table.
+type QueryHoursReportProject struct {
+	ProjectID       string `json:"projectId"`
+	Name            string `json:"name"`
+	Key             string `json:"key"`
+	SFID            string `json:"sfId"`
+	ConsumedMinutes int    `json:"consumedMinutes"`
+	// Duplicate marks a project already shown earlier in the same group,
+	// because more than one of the group's opportunities funds it. Its
+	// consumption is counted ONCE toward the group total; the repeated row
+	// exists only so the opportunity's own funding is visible. ServiceNow
+	// greys these rows out, and the template does the same.
+	Duplicate bool `json:"duplicate"`
+}
+
+// QueryHoursReportOpportunity is one opportunity and the projects it funds.
+type QueryHoursReportOpportunity struct {
+	OpportunityID      string                    `json:"opportunityId"`
+	Name               string                    `json:"name"`
+	SFID               string                    `json:"sfId"`
+	EntitlementMinutes int                       `json:"entitlementMinutes"`
+	Projects           []QueryHoursReportProject `json:"projects"`
+}
+
+// QueryHoursReportGroup is one connected component of the
+// opportunity-to-project funding graph: every opportunity reachable from
+// every project it funds, and vice versa.
+//
+// The component IS the unit the thresholds are applied to, and that is the
+// whole reason it exists. ServiceNow tried to build the same thing by hand —
+// it collected opportunities sharing a project into "groups", merged their
+// totals, and bailed out with the literal string "Complicated Link In Opps
+// and Projects Level" whenever its pairwise union check could not partition
+// the graph, silently dropping that account from the report. A connected
+// component is what that code was reaching for, and computing it properly
+// removes the bail-out.
+type QueryHoursReportGroup struct {
+	Opportunities []QueryHoursReportOpportunity `json:"opportunities"`
+	// EntitlementMinutes sums each opportunity in the component once.
+	EntitlementMinutes int `json:"entitlementMinutes"`
+	// ConsumedMinutes sums each DISTINCT project in the component once. A
+	// project funded by two of the component's opportunities contributes its
+	// consumption a single time.
+	ConsumedMinutes  int  `json:"consumedMinutes"`
+	RemainingMinutes int  `json:"remainingMinutes"`
+	Exceeded         bool `json:"exceeded"`
+	GoingToExceed    bool `json:"goingToExceed"`
+	// RowCount is how many project rows this group renders, so a template can
+	// set rowspans without walking the tree twice.
+	RowCount int `json:"rowCount"`
+}
+
+// QueryHoursReportAccount is one account's section of the report.
+type QueryHoursReportAccount struct {
+	AccountID string                  `json:"accountId"`
+	Name      string                  `json:"name"`
+	SFID      string                  `json:"sfId"`
+	Groups    []QueryHoursReportGroup `json:"groups"`
+	// Exceeded and GoingToExceed are an OR across the account's groups — an
+	// account belongs in a table if ANY of its groups qualifies. That is
+	// ServiceNow's own rule (is_exceeded ||= ...) and it is why the two
+	// tables overlap: an account with one exceeded group and one
+	// nearly-exhausted group appears in both.
+	Exceeded      bool `json:"exceeded"`
+	GoingToExceed bool `json:"goingToExceed"`
+	RowCount      int  `json:"rowCount"`
+	// AccountManagerEmail and TechnicalOwnerEmail are REPORTED, NOT USED for
+	// addressing. ServiceNow derived the report's To line from these (for
+	// exceeded accounts only, seeded with one hardcoded address). This port
+	// addresses the report from configuration instead — see the
+	// query_hours_weekly_report sub-cron — because the ServiceNow copy
+	// available for inspection provably is not the one sending production's
+	// mail, and guessing the rule wrong emails roughly fifty people. They are
+	// surfaced so the decision can be revisited without a schema change.
+	AccountManagerEmail string `json:"accountManagerEmail,omitempty"`
+	TechnicalOwnerEmail string `json:"technicalOwnerEmail,omitempty"`
+}
+
+// QueryHoursWeeklyReport is the whole report: the two tables and their counts.
+type QueryHoursWeeklyReport struct {
+	// GeneratedOn is the report's own date stamp, YYYY-MM-DD.
+	GeneratedOn string `json:"generatedOn"`
+	// ExceededCount and GoingToExceedCount are counts of ACCOUNTS, not rows —
+	// the figures ServiceNow prints in its summary box. They are not disjoint.
+	ExceededCount      int                       `json:"exceededCount"`
+	GoingToExceedCount int                       `json:"goingToExceedCount"`
+	Exceeded           []QueryHoursReportAccount `json:"exceeded"`
+	GoingToExceed      []QueryHoursReportAccount `json:"goingToExceed"`
+	// UnmatchedLineCount totals in-service product lines whose product name
+	// matched none of the six entitlement packs and therefore contributed
+	// zero. Non-zero means a pack was renamed or added in Salesforce and
+	// every entitlement derived from it is silently understated.
+	UnmatchedLineCount int `json:"unmatchedLineCount"`
+}

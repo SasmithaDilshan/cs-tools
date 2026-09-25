@@ -124,3 +124,24 @@ func (h *QueryHourHandler) SweepQueryHours(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+// GetWeeklyReport handles GET /query-hours/weekly-report.
+//
+// Backs the query_hours_weekly_report sub-cron in
+// operations/csm-scheduled-tasks, which renders and sends the email. The
+// division is the same one every report task here uses: this service owns
+// what is true about the estate, the scheduled task owns who hears about it
+// and what the mail looks like.
+//
+// A GET with no parameters: the report has no filters, no pagination and no
+// caller-supplied input at all — it is one fixed question about the whole
+// estate.
+func (h *QueryHourHandler) GetWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	report, err := h.svc.WeeklyReport(r.Context())
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(report)
+}

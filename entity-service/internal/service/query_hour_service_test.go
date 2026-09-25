@@ -31,6 +31,8 @@ import (
 // --- fakes ---------------------------------------------------------------
 
 type fakeQueryHourRepo struct {
+	reportRows   []domain.QueryHoursReportRow
+	reportErr    error
 	consumption  domain.ProjectConsumption
 	consumptErr  error
 	stored       *domain.ProjectQueryHours
@@ -103,6 +105,12 @@ func (f *fakeQueryHourRepo) ProjectIDForTimeCard(_ context.Context, _ string) (s
 
 func (f *fakeQueryHourRepo) NotificationContext(_ context.Context, _ string) (domain.QueryHourNotificationContext, error) {
 	return f.notifCtx, f.notifErr
+}
+
+// WeeklyReportRows satisfies the interface. The weekly report's own tests
+// exercise componentsOf/buildGroup directly and need no fake repo.
+func (f *fakeQueryHourRepo) WeeklyReportRows(ctx context.Context) ([]domain.QueryHoursReportRow, error) {
+	return f.reportRows, f.reportErr
 }
 
 type fakeNotifier struct {

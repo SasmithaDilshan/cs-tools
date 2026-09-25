@@ -60,6 +60,11 @@ type QueryHourRepository interface {
 	// NotificationContext returns the names and internal addresses the
 	// threshold email needs. Any field may be empty when the row carries none.
 	NotificationContext(ctx context.Context, projectID string) (domain.QueryHourNotificationContext, error)
+	// WeeklyReportRows returns every live (account, opportunity, project)
+	// funding row for the weekly consumption report, ordered by account.
+	// Returns no rows — not an error — when the mirrored Salesforce tables
+	// are absent from this database.
+	WeeklyReportRows(ctx context.Context) ([]domain.QueryHoursReportRow, error)
 }
 
 type queryHourRepo struct {
@@ -433,4 +438,174 @@ func (r *queryHourRepo) NotificationContext(ctx context.Context, projectID strin
 			"resolving query-hour notification context for project %s: %w", projectID, err)
 	}
 	return c, nil
+}
+
+// weeklyReportRowsSQL returns one row per (account, opportunity, project)
+// funding relationship that is live today. It is the whole data side of the
+// ServiceNow `[WSO2][Query Hours] Weekly Report`, which walked every account
+// in a loop and issued a product-line query, a link query, and then three
+// time_card aggregates per task per project — tens of thousands of round
+// trips to produce one email. Here it is one statement.
+//
+// The inversion is deliberate. ServiceNow started from `customer_account`
+// (1169 rows carrying a Salesforce id on dev) and discovered that almost
+// every one of them funds nothing. This starts from the product lines that
+// are actually in service (176 on dev) and joins outward, so the result set
+// is the answer rather than something to be filtered down to it.
+//
+// Three things it deliberately does NOT do, because they belong to the
+// caller, not to SQL:
+//
+//  1. It does not group opportunities that share a project. That grouping is
+//     connected components over a bipartite graph, computed in the service
+//     layer — see groupAccount.
+//  2. It does not decide which opportunity a shared project's consumption is
+//     credited to. Reporting the project's consumption on every row it
+//     appears keeps this query honest; the service layer applies the
+//     credit-once rule where it can be deterministic about it.
+//  3. It does not apply the exceeded / going-to-exceed thresholds. Those are
+//     policy and are unit-tested as such.
+//
+// The entitlement arithmetic is the same product-name multiplier
+// entitlementHoursSQL uses — see that constant's doc comment for why the
+// string matching is reproduced rather than replaced by
+// development_support_hours. `unmatched_line_count` travels with each row for
+// the same reason: a renamed pack silently contributes zero, and the only
+// defence is making the silence visible.
+//
+// The account filter is ServiceNow's `u_account_idISNOTEMPTY`: a real scope
+// rule, not an incidental guard — an account with no Salesforce id was never
+// in this report.
+//
+// *** IT CANNOT BE WRITTEN AS AN EMPTINESS TEST. *** csm-sync-service maps
+// account.sf_id and project.sf_id through its `default_with_sysid_suffix`
+// transform, which substitutes the synthetic string
+// "DEFAULT_CSM_SYNC_<source sys_id>" whenever the ServiceNow field is empty —
+// it exists so a NOT NULL + UNIQUE target column can be satisfied without
+// colliding across rows. The effect is that these two columns are NEVER
+// empty, so `sf_id <> ”` silently matches every account and widens the
+// report from "accounts with a Salesforce id" to the whole estate.
+// sf_opportunity.sf_id is mapped with no transform and is genuinely null when
+// absent, so only these two need the guard.
+//
+// The same synthetic value must not reach a record link either: it would
+// render an href to a Salesforce record that does not exist. Both columns are
+// therefore blanked on the way out, and the renderer already falls back to
+// plain text for an empty id.
+//
+// Tested with LEFT(...) rather than LIKE because `_` is a single-character
+// wildcard in LIKE and the prefix is full of them.
+const weeklyReportRowsSQL = `
+WITH in_service AS (
+    SELECT pr.opportunity_id,
+           COALESCE(SUM(
+               pr.quantity * CASE pr.product_name
+                   WHEN 'Development Support - 200 hours' THEN 200
+                   WHEN 'Development Support - 100 hours' THEN 100
+                   WHEN 'Development Support - 50 hours'  THEN 50
+                   WHEN 'Development Support - 25 hours'  THEN 25
+                   WHEN 'Development Support - 10 hours'  THEN 10
+                   WHEN 'Query support limit (included in subscription)' THEN 1
+                   ELSE 0
+               END
+           ), 0) * 60 AS entitlement_minutes,
+           COUNT(*) FILTER (WHERE pr.product_name NOT IN (
+               'Development Support - 200 hours',
+               'Development Support - 100 hours',
+               'Development Support - 50 hours',
+               'Development Support - 25 hours',
+               'Development Support - 10 hours',
+               'Query support limit (included in subscription)'
+           )) AS unmatched_line_count
+      FROM sf_opportunity_product pr
+     WHERE pr.service_start_date <= CURRENT_DATE
+       AND pr.service_end_date   >= CURRENT_DATE
+     GROUP BY pr.opportunity_id
+),
+project_consumed AS (
+    SELECT tc.customer_project_id AS project_id,
+           COALESCE(SUM(
+               CASE WHEN tc.is_billable IS TRUE THEN
+                   COALESCE(tc.analyzing_minutes, 0)
+                 + COALESCE(tc.setting_up_minutes, 0)
+                 + COALESCE(tc.reproducing_debugging_minutes, 0)
+                 + COALESCE(tc.providing_solution_minutes, 0)
+                 + COALESCE(tc.patching_minutes, 0)
+               ELSE 0 END
+           ), 0)::int AS billable_minutes
+      FROM time_card tc
+     WHERE tc.state = 'APPROVED'
+     GROUP BY tc.customer_project_id
+)
+SELECT a.id::text,
+       COALESCE(a.name, ''),
+       CASE WHEN LEFT(COALESCE(a.sf_id, ''), 17) = 'DEFAULT_CSM_SYNC_'
+            THEN '' ELSE COALESCE(a.sf_id, '') END,
+       COALESCE(am.email, ''),
+       COALESCE(towner.email, ''),
+       o.id::text,
+       COALESCE(o.sf_id, ''),
+       COALESCE(o.name, ''),
+       COALESCE(s.entitlement_minutes, 0)::int,
+       COALESCE(s.unmatched_line_count, 0)::int,
+       p.id::text,
+       COALESCE(p.key, ''),
+       COALESCE(p.name, ''),
+       CASE WHEN LEFT(COALESCE(p.sf_id, ''), 17) = 'DEFAULT_CSM_SYNC_'
+            THEN '' ELSE COALESCE(p.sf_id, '') END,
+       COALESCE(c.billable_minutes, 0)::int
+  FROM in_service s
+  JOIN sf_opportunity o        ON o.id = s.opportunity_id
+  JOIN account a               ON a.id = o.account_id
+  JOIN sf_opportunity_link l   ON l.opportunity_id = o.id
+  JOIN project p               ON p.id = l.project_id
+  LEFT JOIN project_consumed c ON c.project_id = p.id
+  LEFT JOIN "user" am          ON am.id = a.account_manager_id
+  LEFT JOIN "user" towner      ON towner.id = a.technical_owner_id
+ WHERE COALESCE(a.sf_id, '') <> ''
+   AND LEFT(a.sf_id, 17) <> 'DEFAULT_CSM_SYNC_'
+ ORDER BY a.name, a.id, o.name, o.id, p.name, p.id`
+
+// WeeklyReportRows returns every live (account, opportunity, project) funding
+// row, ordered so the caller can group by account without sorting again.
+//
+// Like Consumption, a missing sf_* table degrades rather than fails: those
+// tables are mirrored by csm-sync-service (digiops-cs migration 0080), and an
+// environment without them should report nothing rather than 500. Only
+// SQLSTATE 42P01 (undefined_table) is treated that way — any other error is a
+// real failure and is returned.
+func (r *queryHourRepo) WeeklyReportRows(ctx context.Context) ([]domain.QueryHoursReportRow, error) {
+	rows, err := r.db.Query(ctx, weeklyReportRowsSQL)
+	if err != nil {
+		// Same narrow rule as Consumption above, and for the same reason:
+		// ONLY "relation does not exist" may be degraded. Literal SQLSTATE
+		// with a comment, matching problem_repo.go and case_repo.go.
+		pgErr := (*pgconn.PgError)(nil)
+		if !errors.As(err, &pgErr) || pgErr.Code != "42P01" { // undefined_table
+			return nil, fmt.Errorf("querying weekly query-hour report rows: %w", err)
+		}
+		slog.WarnContext(ctx, "query hours: opportunity tables absent (migration 0080 not applied), weekly report is empty")
+		return nil, nil
+	}
+	defer rows.Close()
+
+	var out []domain.QueryHoursReportRow
+	for rows.Next() {
+		var row domain.QueryHoursReportRow
+		if err := rows.Scan(
+			&row.AccountID, &row.AccountName, &row.AccountSFID,
+			&row.AccountManagerEmail, &row.TechnicalOwnerEmail,
+			&row.OpportunityID, &row.OpportunitySFID, &row.OpportunityName,
+			&row.EntitlementMinutes, &row.UnmatchedLineCount,
+			&row.ProjectID, &row.ProjectKey, &row.ProjectName, &row.ProjectSFID,
+			&row.ConsumedMinutes,
+		); err != nil {
+			return nil, fmt.Errorf("scanning weekly query-hour report row: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading weekly query-hour report rows: %w", err)
+	}
+	return out, nil
 }

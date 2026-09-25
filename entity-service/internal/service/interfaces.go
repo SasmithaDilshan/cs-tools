@@ -1058,6 +1058,11 @@ type QueryHourService interface {
 	// Get returns the stored position without recomputing. A NotFoundError
 	// means the project has never been computed.
 	Get(ctx context.Context, projectID string) (domain.ProjectQueryHours, error)
+	// WeeklyReport assembles the weekly query-hour consumption report: every
+	// account with an exceeded or nearly-exhausted entitlement, grouped by
+	// connected components of the opportunity-to-project funding graph. Read
+	// only — unlike the ServiceNow flow it ports, it writes nothing.
+	WeeklyReport(ctx context.Context) (domain.QueryHoursWeeklyReport, error)
 	// Sweep recomputes up to limit projects whose position is older than
 	// staleFor, stalest first. A single project's failure is recorded and the
 	// sweep continues.

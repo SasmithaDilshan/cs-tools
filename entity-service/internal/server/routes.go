@@ -793,6 +793,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, service.Even
 		mux.HandleFunc("POST /projects/{id}/query-hours/recompute", queryHourHandler.RecomputeProjectQueryHours)
 		mux.HandleFunc("POST /time-cards/{id}/query-hours/recompute", queryHourHandler.RecomputeForTimeCard)
 		mux.HandleFunc("POST /query-hours/sweep", queryHourHandler.SweepQueryHours)
+		mux.HandleFunc("GET /query-hours/weekly-report", queryHourHandler.GetWeeklyReport)
 	}
 	mux.HandleFunc("GET /health", handler.HealthCheck)
 

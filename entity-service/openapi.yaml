@@ -2701,6 +2701,43 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /query-hours/weekly-report:
+    get:
+      summary: The weekly query-support consumption report.
+      description: >-
+        Postgres data source only. Backs the `query_hours_weekly_report`
+        sub-cron in operations/csm-scheduled-tasks, which renders and emails
+        it. Lists every account whose purchased query hours are exhausted
+        (`exceeded`) or nearly so (`goingToExceed`).
+
+
+        Accounts are grouped by connected components of the
+        opportunity-to-project funding graph: opportunities that fund a
+        project in common are one unit, because their entitlements are
+        interchangeable in practice. Thresholds are applied to the component's
+        merged totals.
+
+
+        `goingToExceed` is an ABSOLUTE floor — under ten hours remaining — not
+        a percentage, and is unrelated to the 75/90/100 percent thresholds
+        used by the per-project threshold notification. The two lists are not
+        disjoint: an account with one exhausted component and one nearly
+        exhausted component appears in both, and the counts reflect that.
+
+
+        Read only. The ServiceNow flow this ports also stamped an
+        opportunity-level state and cached rendered HTML; neither is
+        reproduced here.
+      operationId: getQueryHoursWeeklyReport
+      responses:
+        "200":
+          description: The report. Empty lists mean no account qualifies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryHoursWeeklyReport'
+        "500":
+          description: Internal server error.
   /projects/{id}/time-cards/stats:
     get:
       summary: Get a project's time-card statistics, optionally filtered by a date range.
@@ -7788,6 +7825,134 @@ components:
                 entitlement rule knows, and which therefore contributed zero
                 hours. Non-zero means a pack has been renamed or added and the
                 entitlement is quietly too low.
+    QueryHoursWeeklyReport:
+      type: object
+      properties:
+        generatedOn:
+          type: string
+          format: date
+          description: The UTC date the report was built.
+        exceededCount:
+          type: integer
+          description: Number of ACCOUNTS in `exceeded` — not rows.
+        goingToExceedCount:
+          type: integer
+          description: >-
+            Number of ACCOUNTS in `goingToExceed`. Not disjoint from
+            `exceededCount`; an account can be in both.
+        exceeded:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryHoursReportAccount'
+        goingToExceed:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryHoursReportAccount'
+        unmatchedLineCount:
+          type: integer
+          description: >-
+            In-service product lines whose product name matched none of the
+            six known entitlement packs and so contributed zero hours.
+            Non-zero means a pack was renamed or added in Salesforce and every
+            entitlement derived from it is understated.
+    QueryHoursReportAccount:
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        sfId:
+          type: string
+          description: Salesforce account id, for building a record link.
+        exceeded:
+          type: boolean
+          description: True when ANY of the account's groups is exhausted.
+        goingToExceed:
+          type: boolean
+          description: True when ANY of the account's groups is nearly exhausted.
+        rowCount:
+          type: integer
+          description: Total project rows the account renders, for rowspans.
+        accountManagerEmail:
+          type: string
+          description: >-
+            Reported, not used for addressing. ServiceNow derived the report's
+            recipients from this; this port addresses from configuration
+            instead. Surfaced so that decision can be revisited.
+        technicalOwnerEmail:
+          type: string
+          description: See `accountManagerEmail`.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryHoursReportGroup'
+    QueryHoursReportGroup:
+      type: object
+      description: >-
+        One connected component of the opportunity-to-project funding graph,
+        and the unit the thresholds are applied to.
+      properties:
+        entitlementMinutes:
+          type: integer
+          description: Sums each opportunity in the component once.
+        consumedMinutes:
+          type: integer
+          description: >-
+            Sums each DISTINCT project in the component once, and counts
+            approved BILLABLE time only.
+        remainingMinutes:
+          type: integer
+          description: Negative when the component is over its entitlement.
+        exceeded:
+          type: boolean
+        goingToExceed:
+          type: boolean
+        rowCount:
+          type: integer
+        opportunities:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryHoursReportOpportunity'
+    QueryHoursReportOpportunity:
+      type: object
+      properties:
+        opportunityId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        sfId:
+          type: string
+        entitlementMinutes:
+          type: integer
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryHoursReportProject'
+    QueryHoursReportProject:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        key:
+          type: string
+        sfId:
+          type: string
+        consumedMinutes:
+          type: integer
+          description: The project's approved billable time.
+        duplicate:
+          type: boolean
+          description: >-
+            True when this project already appeared earlier in the same group,
+            funded by another of its opportunities. Its consumption counts
+            once toward the group total; the repeated row exists so the
+            opportunity's own funding stays visible.
     RecomputeQueryHoursBatchResponse:
       type: object
       properties:
