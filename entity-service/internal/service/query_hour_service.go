@@ -459,7 +459,7 @@ func (s *queryHourService) publishThresholdReached(
 	ctx context.Context,
 	projectID string,
 	state, previousState int,
-	consumption domain.ProjectConsumption,
+	consumption domain.QueryHourConsumption,
 	stored domain.ProjectQueryHours,
 ) {
 	if !s.notificationsEnabled {

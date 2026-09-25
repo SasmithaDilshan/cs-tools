@@ -11,11 +11,13 @@ info:
     |---|---|---|
     | (any authenticated caller) | `GET`/`PATCH /users/me` | none needed |
     | `view` | every other `GET`, `*/search` and `*/aggregate` | any role below |
-    | `view_operations` | the same reads under `/incidents`, `/change-requests`, `/problems`, `/incident-tasks`, `/outages`, `/alerts`, `/smart-alerts` | support-engineer, admin |
-    | `time_cards_and_updates` | every `/time-cards` route and `GET /updates/product-update-levels`, `POST /updates/levels/search` | support-engineer, time-card-approver, admin |
-    | `escalate` | `POST /cases/{id}/escalations` | escalator, support-engineer, admin |
-    | `download_attachment` | `GET /attachments/{id}/content`, `POST /attachments/{id}/share` | attachment-downloader, support-engineer, admin |
-    | `write` | every other `POST`/`PATCH`/`DELETE`, including case, incident and change-request comments | support-engineer, admin |
+    | `view_operations` | the same reads under `/incidents`, `/change-requests`, `/problems`, `/incident-tasks`, `/outages`, `/alerts`, `/smart-alerts` | cs-engineer, admin |
+    | `time_cards_and_updates` | every `/time-cards` route and `GET /updates/product-update-levels`, `POST /updates/levels/search` | cs-engineer, time-card-approver, admin |
+    | `escalate` | `POST /cases/{id}/escalations` | escalator, cs-engineer, admin |
+    | `download_attachment` | `GET /attachments/{id}/content`, `POST /attachments/{id}/share` | attachment-downloader, cs-engineer, admin |
+    | `write` | every other `POST`/`PATCH`/`DELETE`, including case, incident and change-request comments | cs-engineer, admin |
+    | `admin` | `POST /users` | admin only |
+    | `security_center` | `POST /products/vulnerabilities/search`, `GET /products/vulnerabilities/{id}`, and a `POST /cases/search`/`GET /cases/{id}` naming case type security_report_analysis | cs-engineer, admin |
 security:
   - bearerAuth: []
 servers:
@@ -1693,6 +1695,66 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorPayload'
 
+  /users:
+    post:
+      summary: Create a new user.
+      description: >
+        Inserts a new platform user. Admin-only — every other portal role gets
+        403. Postgres data source only. roles is optional and currently unused
+        by the CSM portal frontend (no UI to pick a role yet); each name, if
+        supplied, is checked against the same configured role allow-list
+        POST /roles/search serves.
+      operationId: postUsers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserPayload'
+      responses:
+        "201":
+          description: The created user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        "400":
+          description: Bad request — missing/invalid email, neither firstName nor lastName supplied, or an unrecognized role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "403":
+          description: Forbidden — caller does not hold the admin role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "409":
+          description: A user with this email already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "413":
+          description: RequestEntityTooLarge
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "500":
+          description: InternalServerError
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+
   /users/search:
     post:
       summary: Search users with optional filters, sort, and pagination.
@@ -1793,6 +1855,72 @@ paths:
                 $ref: '#/components/schemas/ErrorPayload'
         "404":
           description: NotFound
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "500":
+          description: InternalServerError
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+    patch:
+      summary: Update an account's CRE and/or SRE team.
+      description: >
+        Postgres data source only; there is no ServiceNow equivalent. Provide creTeamId,
+        sreTeamId, or both. A field left out of the request body leaves that team assignment
+        unchanged; there is currently no way to clear an assignment back to no team once set.
+        The request body is forwarded to the entity service as-is and the response is
+        returned verbatim.
+      operationId: patchAccountsId
+      parameters:
+        - name: id
+          in: path
+          description: ID of the account
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Account team update payload
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountTeamsPayload'
+        required: true
+      responses:
+        "200":
+          description: Ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetail'
+        "400":
+          description: BadRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "404":
+          description: NotFound
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        "413":
+          description: RequestEntityTooLarge
           content:
             application/json:
               schema:
@@ -3409,7 +3537,7 @@ paths:
         files (one file per dashboard, its filename irrelevant), held in
         memory; not user-configurable at runtime. A dashboard marked
         restricted in its definition is silently left out of this list for a
-        caller who is not a support engineer or admin — the request still
+        caller who is not a CS engineer or admin — the request still
         succeeds, just with a shorter list.
       operationId: getDashboards
       responses:
@@ -3574,7 +3702,7 @@ paths:
         templates are a registry loaded at startup from a directory of
         per-dashboard JSON files, held in memory; not user-configurable at
         runtime. A dashboard marked restricted in its definition returns 403
-        for a caller who is not a support engineer or admin, even with a
+        for a caller who is not a CS engineer or admin, even with a
         correct id.
       operationId: getDashboardDetail
       parameters:
@@ -9841,7 +9969,7 @@ components:
           type: array
           items:
             type: string
-            enum: [viewer, escalator, attachment_downloader, support_engineer, usage_metrics_viewer, timecard_approver, dashboard_designer, admin]
+            enum: [viewer, escalator, attachment_downloader, cs_engineer, usage_metrics_viewer, timecard_approver, dashboard_designer, admin]
           description: >
             The portal roles the caller holds, decided from the roles on their token. A caller can
             hold several. Always present; empty when they hold none. This is not the entity
@@ -10315,6 +10443,26 @@ components:
           type: string
           format: date-time
 
+    CreateUserPayload:
+      type: object
+      required: [email]
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: string
+          description: >-
+            Role names to grant. Optional; omit or leave empty to create the
+            user with no roles. Not currently exposed in the CSM portal UI.
+      description: At least one of firstName/lastName is required.
+
     AccountSearchPayload:
       type: object
       properties:
@@ -10340,6 +10488,33 @@ components:
             classification:
               type: string
               description: Filter by classification.
+
+    UpdateAccountTeamsPayload:
+      type: object
+      description: >
+        At least one of creTeamId/sreTeamId must be provided. A field left out of the
+        request body leaves that team assignment unchanged; there is currently no way to
+        clear an assignment back to no team once set.
+      properties:
+        creTeamId:
+          type: string
+          nullable: true
+          description: References an existing team by ID. Omit to leave the account's CRE team unchanged.
+        sreTeamId:
+          type: string
+          nullable: true
+          description: References an existing team by ID. Omit to leave the account's SRE team unchanged.
+      anyOf:
+        - required:
+            - creTeamId
+          properties:
+            creTeamId:
+              type: string
+        - required:
+            - sreTeamId
+          properties:
+            sreTeamId:
+              type: string
 
     AccountSearchResponse:
       type: object
@@ -13657,6 +13832,12 @@ components:
         projectCount:
           type: integer
           description: Set for kind=batch only.
+        isSecurityAnnouncement:
+          type: boolean
+          description: >-
+            Set for kind=batch only — a bare legacy case (kind=case) has no
+            owning request to read this from and is never inferred from its
+            own tags, so it's omitted rather than guessed at.
         cases:
           type: array
           description: >-
