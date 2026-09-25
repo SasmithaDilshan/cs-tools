@@ -94,9 +94,16 @@ const (
 	EntitlementSourceServiceNow = "servicenow_synced"
 )
 
-// ProjectConsumption is the raw aggregate the repository returns for one
+// QueryHourConsumption is the raw aggregate the repository returns for one
 // project, before thresholds are applied.
-type ProjectConsumption struct {
+// NOTE ON THE NAME: this was ProjectConsumption until dev-app-csm-portal grew
+// a type of that name for something entirely unrelated — a project's Choreo
+// provisioning state (application id, consumer key/secret). Two unrelated
+// meanings cannot share one name in one package, and the provisioning type was
+// there first on the target branch, so the query-hour one is the one that
+// moved. The name is also simply more accurate: this is a query-hour figure,
+// not a general notion of what a project consumes.
+type QueryHourConsumption struct {
 	ProjectID   string
 	ProjectKey  string
 	ProjectSFID string
@@ -128,7 +135,7 @@ type ProjectConsumption struct {
 // time_card.total and split it by u_is_billable; the Postgres time_card has
 // no `total` column, so the split is summed from the five per-activity
 // minute columns instead and the total is their sum.
-func (c ProjectConsumption) ConsumedMinutes() int {
+func (c QueryHourConsumption) ConsumedMinutes() int {
 	return c.BillableMinutes + c.NonBillableMinutes
 }
 

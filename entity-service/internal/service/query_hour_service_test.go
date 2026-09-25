@@ -33,7 +33,7 @@ import (
 type fakeQueryHourRepo struct {
 	reportRows   []domain.QueryHoursReportRow
 	reportErr    error
-	consumption  domain.ProjectConsumption
+	consumption  domain.QueryHourConsumption
 	consumptErr  error
 	stored       *domain.ProjectQueryHours
 	getErr       error
@@ -52,11 +52,11 @@ type fakeQueryHourRepo struct {
 	markCalls     int
 }
 
-func (f *fakeQueryHourRepo) Consumption(_ context.Context, _ string) (domain.ProjectConsumption, error) {
+func (f *fakeQueryHourRepo) Consumption(_ context.Context, _ string) (domain.QueryHourConsumption, error) {
 	return f.consumption, f.consumptErr
 }
 
-func (f *fakeQueryHourRepo) Upsert(_ context.Context, c domain.ProjectConsumption, state int) (domain.ProjectQueryHours, error) {
+func (f *fakeQueryHourRepo) Upsert(_ context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, error) {
 	if f.upsertErr != nil {
 		return domain.ProjectQueryHours{}, f.upsertErr
 	}
@@ -162,7 +162,7 @@ func TestQueryHourStateFor_Thresholds(t *testing.T) {
 // ServiceNow skipped projects with no entitlement to dodge a divide-by-zero.
 // Here the project is still recorded, at 0%.
 func TestRecompute_NoEntitlementIsZeroPercentNotADivideByZero(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", EntitlementMinutes: 0, BillableMinutes: 600,
 	}}
 	svc := NewQueryHourService(repo, nil, nil, unrestrictedAccess{}, true)
@@ -190,7 +190,7 @@ func TestRecompute_StateWalksBackDownWhenConsumptionDrops(t *testing.T) {
 			QueryHourState: domain.QueryHourStateExceeded, LastPushedState: queryHourStatePtr(domain.QueryHourStateExceeded),
 		},
 		// A recalled time card has since dropped consumption to 50%.
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 3000,
 		},
@@ -217,7 +217,7 @@ func TestRecompute_StateWalksBackDownWhenConsumptionDrops(t *testing.T) {
 // Remaining minutes go negative on an overrun rather than clamping at zero —
 // an overrun is real information and SN recorded it too.
 func TestRecompute_OverrunReportsNegativeRemaining(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", EntitlementMinutes: 6000,
 		BillableMinutes: 7000, NonBillableMinutes: 500,
 	}}
@@ -245,7 +245,7 @@ func TestRecompute_DoesNotRePushWhenStateUnchanged(t *testing.T) {
 		stored: &domain.ProjectQueryHours{
 			QueryHourState: domain.QueryHourStateWarning, LastPushedState: queryHourStatePtr(domain.QueryHourStateWarning),
 		},
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 4800, // exactly 80%
 		},
@@ -273,7 +273,7 @@ func TestRecompute_RetriesPushAfterEarlierFailure(t *testing.T) {
 		stored: &domain.ProjectQueryHours{
 			QueryHourState: domain.QueryHourStateWarning, LastPushedState: queryHourStatePtr(domain.QueryHourStateNormal),
 		},
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 4800,
 		},
@@ -295,7 +295,7 @@ func TestRecompute_RetriesPushAfterEarlierFailure(t *testing.T) {
 // A push failure must not fail the recompute: the position is already stored
 // and the next sweep retries. Same reasoning as the nil Event Hub publisher.
 func TestRecompute_PushFailureDoesNotFailTheCall(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", ProjectSFID: "sf1",
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
@@ -321,7 +321,7 @@ func TestRecompute_PushFailureDoesNotFailTheCall(t *testing.T) {
 // `undefined` as the subscription id; skipping and saying so is the honest
 // equivalent.
 func TestRecompute_SkipsPushWhenProjectHasNoSalesforceID(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", ProjectSFID: "",
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
@@ -343,7 +343,7 @@ func TestRecompute_SkipsPushWhenProjectHasNoSalesforceID(t *testing.T) {
 // A nil notifier (QUERY_HOUR_CHOREO_BASE_URL unset) disables pushing without
 // disabling the recompute, and must not panic.
 func TestRecompute_NilNotifierStillRecords(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", ProjectSFID: "sf1",
 		EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
@@ -364,7 +364,7 @@ func TestRecompute_NilNotifierStillRecords(t *testing.T) {
 // The payload field names and units are what the Choreo service already
 // receives from ServiceNow, so cutover needs no change on their side.
 func TestRecompute_PushPayloadMatchesServiceNowShape(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", ProjectSFID: "a0d7h00000Dt0R4AAJ",
 		EntitlementMinutes: 12600, BillableMinutes: 19281,
 	}}
@@ -387,7 +387,7 @@ func TestRecompute_PushPayloadMatchesServiceNowShape(t *testing.T) {
 func TestRecomputeForTimeCard_ScopesToTheCardsOwnProject(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		timeCardProj: "p-owning",
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p-owning", EntitlementMinutes: 6000, BillableMinutes: 600,
 		},
 	}
@@ -428,7 +428,7 @@ func TestSweep_ContinuesPastAFailingProject(t *testing.T) {
 	repo := &failOnFirstRepo{
 		fakeQueryHourRepo: fakeQueryHourRepo{
 			staleIDs: []string{"bad", "good1", "good2"},
-			consumption: domain.ProjectConsumption{
+			consumption: domain.QueryHourConsumption{
 				EntitlementMinutes: 6000, BillableMinutes: 600,
 			},
 		},
@@ -473,9 +473,9 @@ type failOnFirstRepo struct {
 	failFor string
 }
 
-func (f *failOnFirstRepo) Consumption(ctx context.Context, projectID string) (domain.ProjectConsumption, error) {
+func (f *failOnFirstRepo) Consumption(ctx context.Context, projectID string) (domain.QueryHourConsumption, error) {
 	if projectID == f.failFor {
-		return domain.ProjectConsumption{}, errors.New("boom")
+		return domain.QueryHourConsumption{}, errors.New("boom")
 	}
 	c := f.fakeQueryHourRepo.consumption
 	c.ProjectID = projectID
@@ -489,7 +489,7 @@ func (f *failOnFirstRepo) Consumption(ctx context.Context, projectID string) (do
 func TestRecompute_PropagatesNonNotFoundErrorFromGet(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		getErr: errors.New("connection reset"),
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", EntitlementMinutes: 6000, BillableMinutes: 6000,
 		},
 	}
@@ -505,7 +505,7 @@ func TestRecompute_PropagatesNonNotFoundErrorFromGet(t *testing.T) {
 func TestRecompute_FirstComputationIsABaselineAndDoesNotNotify(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		stored: nil, // no row yet
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 6000, // 100% -> state 3
 		},
@@ -528,7 +528,7 @@ func TestRecompute_FirstComputationIsABaselineAndDoesNotNotify(t *testing.T) {
 func TestRecompute_NotifiesOnceABaselineExists(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		stored: &domain.ProjectQueryHours{QueryHourState: domain.QueryHourStateNormal},
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 4500, // 75% -> state 1
 		},
@@ -548,7 +548,7 @@ func TestRecompute_NotifiesOnceABaselineExists(t *testing.T) {
 func TestRecompute_NotificationsDisabledSuppressesTheEmailOnly(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		stored: &domain.ProjectQueryHours{QueryHourState: domain.QueryHourStateNormal},
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 4500,
 		},
@@ -576,7 +576,7 @@ func TestRecompute_NotificationsDisabledSuppressesTheEmailOnly(t *testing.T) {
 func TestSweep_StopsCleanlyWhenTheDeadlineIsReached(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		staleIDs:    []string{"a", "b", "c"},
-		consumption: domain.ProjectConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
+		consumption: domain.QueryHourConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already past the deadline
@@ -625,7 +625,7 @@ func TestSweep_StopsOnTheTimeBudget(t *testing.T) {
 	repo := &slowRepo{
 		fakeQueryHourRepo: fakeQueryHourRepo{
 			staleIDs:    []string{"a", "b", "c", "d"},
-			consumption: domain.ProjectConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
+			consumption: domain.QueryHourConsumption{EntitlementMinutes: 6000, BillableMinutes: 600},
 		},
 		delay: 25 * time.Millisecond,
 	}
@@ -648,7 +648,7 @@ type slowRepo struct {
 	delay time.Duration
 }
 
-func (r *slowRepo) Consumption(_ context.Context, projectID string) (domain.ProjectConsumption, error) {
+func (r *slowRepo) Consumption(_ context.Context, projectID string) (domain.QueryHourConsumption, error) {
 	time.Sleep(r.delay)
 	c := r.fakeQueryHourRepo.consumption
 	c.ProjectID = projectID
@@ -663,10 +663,13 @@ func (unrestrictedAccess) ResolveScope(context.Context) (AccessScope, error) {
 	return AccessScope{Unrestricted: true}, nil
 }
 
-// scopedAccess is an EXTERNAL caller limited to the listed projects.
-type scopedAccess struct{ projects []string }
+// queryHourScopedAccess is an EXTERNAL caller limited to the listed projects.
+// Named for this suite rather than the plainer scopedAccess, which
+// project_consumption_service_test.go already defines in this package for
+// the same purpose with a different field name.
+type queryHourScopedAccess struct{ projects []string }
 
-func (a scopedAccess) ResolveScope(context.Context) (AccessScope, error) {
+func (a queryHourScopedAccess) ResolveScope(context.Context) (AccessScope, error) {
 	return AccessScope{Unrestricted: false, ProjectIDs: a.projects}, nil
 }
 
@@ -674,7 +677,7 @@ func (a scopedAccess) ResolveScope(context.Context) (AccessScope, error) {
 // and must not be able to tell a forbidden project from a missing one.
 func TestGet_OutOfScopeProjectIsNotFound(t *testing.T) {
 	repo := &fakeQueryHourRepo{stored: &domain.ProjectQueryHours{QueryHourState: 2}}
-	svc := NewQueryHourService(repo, nil, nil, scopedAccess{projects: []string{"other"}}, true)
+	svc := NewQueryHourService(repo, nil, nil, queryHourScopedAccess{projects: []string{"other"}}, true)
 
 	_, err := svc.Get(context.Background(), "p1")
 	var nfe *apierror.NotFoundError
@@ -686,11 +689,11 @@ func TestGet_OutOfScopeProjectIsNotFound(t *testing.T) {
 // Recompute has side effects (a Choreo push and possibly an email), so it must
 // refuse before doing any of them.
 func TestRecompute_OutOfScopeProjectDoesNothing(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", ProjectSFID: "sf1", EntitlementMinutes: 6000, BillableMinutes: 6000,
 	}}
 	notifier := &fakeNotifier{}
-	svc := NewQueryHourService(repo, notifier, nil, scopedAccess{projects: []string{"other"}}, true)
+	svc := NewQueryHourService(repo, notifier, nil, queryHourScopedAccess{projects: []string{"other"}}, true)
 
 	if _, err := svc.Recompute(context.Background(), "p1"); err == nil {
 		t.Fatal("Recompute succeeded for an out-of-scope project")
@@ -705,10 +708,10 @@ func TestRecompute_OutOfScopeProjectDoesNothing(t *testing.T) {
 
 // A caller inside scope is unaffected.
 func TestRecompute_InScopeProjectSucceeds(t *testing.T) {
-	repo := &fakeQueryHourRepo{consumption: domain.ProjectConsumption{
+	repo := &fakeQueryHourRepo{consumption: domain.QueryHourConsumption{
 		ProjectID: "p1", EntitlementMinutes: 6000, BillableMinutes: 600,
 	}}
-	svc := NewQueryHourService(repo, nil, nil, scopedAccess{projects: []string{"p1"}}, true)
+	svc := NewQueryHourService(repo, nil, nil, queryHourScopedAccess{projects: []string{"p1"}}, true)
 	if _, err := svc.Recompute(context.Background(), "p1"); err != nil {
 		t.Fatalf("Recompute: %v", err)
 	}
@@ -718,7 +721,7 @@ func TestRecompute_InScopeProjectSucceeds(t *testing.T) {
 // service may run it.
 func TestSweep_RefusesANonInternalCaller(t *testing.T) {
 	repo := &fakeQueryHourRepo{staleIDs: []string{"a"}}
-	svc := NewQueryHourService(repo, nil, nil, scopedAccess{projects: []string{"a"}}, true)
+	svc := NewQueryHourService(repo, nil, nil, queryHourScopedAccess{projects: []string{"a"}}, true)
 
 	_, err := svc.Sweep(context.Background(), time.Hour, 10)
 	var fe *apierror.ForbiddenError
@@ -733,7 +736,7 @@ func TestSweep_RefusesANonInternalCaller(t *testing.T) {
 func TestRecompute_PayloadCarriesTheAccountManagersName(t *testing.T) {
 	repo := &fakeQueryHourRepo{
 		stored: &domain.ProjectQueryHours{QueryHourState: domain.QueryHourStateCritical},
-		consumption: domain.ProjectConsumption{
+		consumption: domain.QueryHourConsumption{
 			ProjectID: "p1", ProjectKey: "INTREPIDSUBSUB", ProjectSFID: "sf1",
 			EntitlementMinutes: 6000, BillableMinutes: 6095,
 		},

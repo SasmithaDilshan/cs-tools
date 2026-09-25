@@ -40,11 +40,11 @@ import (
 type QueryHourRepository interface {
 	// Consumption aggregates one project's approved time cards and reads its
 	// entitlement. Returns a NotFoundError if no project row has that id.
-	Consumption(ctx context.Context, projectID string) (domain.ProjectConsumption, error)
+	Consumption(ctx context.Context, projectID string) (domain.QueryHourConsumption, error)
 	// Upsert writes the computed position and returns it as stored.
 	// lastPushedState/lastPushedAt are preserved, never overwritten here —
 	// MarkPushed owns those.
-	Upsert(ctx context.Context, c domain.ProjectConsumption, state int) (domain.ProjectQueryHours, error)
+	Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, error)
 	// MarkPushed records that Choreo accepted `state` for this project.
 	MarkPushed(ctx context.Context, projectID string, state int, at time.Time) error
 	// Get returns the stored position without recomputing it.
@@ -201,18 +201,18 @@ LEFT JOIN time_card tc
 WHERE p.id = $1
 GROUP BY p.id, p.key, p.sf_id, p.total_query_duration`
 
-func (r *queryHourRepo) Consumption(ctx context.Context, projectID string) (domain.ProjectConsumption, error) {
-	var c domain.ProjectConsumption
+func (r *queryHourRepo) Consumption(ctx context.Context, projectID string) (domain.QueryHourConsumption, error) {
+	var c domain.QueryHourConsumption
 	err := r.db.QueryRow(ctx, consumptionSQL, projectID).Scan(
 		&c.ProjectID, &c.ProjectKey, &c.ProjectSFID,
 		&c.SyncedEntitlementMinutes, &c.BillableMinutes, &c.NonBillableMinutes,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ProjectConsumption{}, &apierror.NotFoundError{
+		return domain.QueryHourConsumption{}, &apierror.NotFoundError{
 			Msg: fmt.Sprintf("project %s not found", projectID)}
 	}
 	if err != nil {
-		return domain.ProjectConsumption{}, fmt.Errorf("aggregating query hours for project %s: %w", projectID, err)
+		return domain.QueryHourConsumption{}, fmt.Errorf("aggregating query hours for project %s: %w", projectID, err)
 	}
 
 	// Entitlement is a separate query rather than a join: the consumption
@@ -238,7 +238,7 @@ func (r *queryHourRepo) Consumption(ctx context.Context, projectID string) (doma
 		// case_repo.go rather than pulling in pgerrcode for one constant.
 		pgErr := (*pgconn.PgError)(nil)
 		if !errors.As(err, &pgErr) || pgErr.Code != "42P01" { // undefined_table
-			return domain.ProjectConsumption{}, fmt.Errorf(
+			return domain.QueryHourConsumption{}, fmt.Errorf(
 				"deriving query-hour entitlement for project %s: %w", projectID, err)
 		}
 		slog.Warn("query hours: opportunity tables absent (migration 0080 not applied), falling back to the synced ServiceNow figure",
@@ -285,7 +285,7 @@ RETURNING project_id::text, entitlement_minutes, consumed_minutes,
           billable_minutes, non_billable_minutes, query_hour_state,
           last_pushed_state, last_pushed_at, computed_at`
 
-func (r *queryHourRepo) Upsert(ctx context.Context, c domain.ProjectConsumption, state int) (domain.ProjectQueryHours, error) {
+func (r *queryHourRepo) Upsert(ctx context.Context, c domain.QueryHourConsumption, state int) (domain.ProjectQueryHours, error) {
 	var q domain.ProjectQueryHours
 	err := r.db.QueryRow(ctx, upsertSQL,
 		c.ProjectID, c.EntitlementMinutes, c.ConsumedMinutes(),
