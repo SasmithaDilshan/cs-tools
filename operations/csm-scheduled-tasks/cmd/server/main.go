@@ -46,6 +46,8 @@ import (
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/notify"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/opencases"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/queryhours"
+	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/queryhoursreport"
+	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/queryhoursweekly"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/registry"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/stalecases"
 )
@@ -92,6 +94,23 @@ func main() {
 	})
 	if err != nil {
 		slog.Error("failed to construct entity-service query-hours client", "err", err)
+		os.Exit(1)
+	}
+
+	// Fifth entity-service client, same deployment and credentials again. The
+	// weekly report asks a completely different question from the hourly
+	// recompute above — "which ACCOUNTS have run out" rather than "which
+	// PROJECT moved" — and reads none of the same endpoints, so it gets its
+	// own narrow client rather than a second method on that one.
+	queryHoursReportClient, err := queryhoursreport.NewClient(queryhoursreport.Config{
+		BaseURL:      entityServiceBaseURL,
+		TokenURL:     oauthTokenURL,
+		ClientID:     oauthClientID,
+		ClientSecret: oauthClientSecret,
+		Scopes:       entityServiceScopes,
+	})
+	if err != nil {
+		slog.Error("failed to construct entity-service query-hours report client", "err", err)
 		os.Exit(1)
 	}
 	ledgerClient, err := ledger.NewClient(ledger.Config{
@@ -197,6 +216,15 @@ func main() {
 	const queryHoursTaskName = "query_hour_recompute"
 	queryHoursTo, queryHoursCc := recipientsFor(recipientOverrides, queryHoursTaskName)
 
+	// The Salesforce instance the report's account, opportunity and project
+	// cells link to. Optional: unset renders those cells as plain text, which
+	// is still a complete and readable report. ServiceNow read the same value
+	// from its own `salesforce.url` system property.
+	salesforceBaseURL := os.Getenv("SALESFORCE_BASE_URL")
+
+	const queryHoursReportTaskName = "query_hours_weekly_report"
+	queryHoursReportTo, queryHoursReportCc := recipientsFor(recipientOverrides, queryHoursReportTaskName)
+
 	tasks := []registry.Task{
 		// This component's first real sub-cron: deletes rows from
 		// entity-service's scheduled_task_run table that succeeded or were
@@ -279,6 +307,38 @@ func main() {
 			Handler:  queryhours.RecomputeQueryHours(queryHoursClient, queryhours.DefaultStaleFor, queryhours.DefaultLimit),
 			To:       queryHoursTo,
 			Cc:       queryHoursCc,
+		},
+		// The weekly query-support consumption report.
+		//
+		// *** THE SCHEDULE IS SUNDAY 18:30 UTC ON PURPOSE. ***
+		// ServiceNow fires this weekly at 00:00:05 on day 1 interpreted in the
+		// instance's own zone, Asia/Colombo — which is 18:30 UTC on Sunday.
+		// Recipients have had it land Monday first thing, local time, for
+		// years. `0 0 * * 1` under TZ=UTC would look like the obvious
+		// translation and would quietly move the mail five and a half hours
+		// later. It would also change the report's own date stamp: the stamp
+		// is a UTC date, so firing before midnight UTC is exactly why the
+		// Monday mail is headed with Sunday's date.
+		//
+		// Override via SUB_CRON_SCHEDULES like any other task if the audience
+		// would rather have it at a round hour.
+		//
+		// NOT a paired deactivation with ServiceNow yet: the flow this ports
+		// also WRITES sf_opportunity.query_hour_state and caches HTML onto the
+		// account, and only the read half is ported here. Turning the
+		// ServiceNow flow off would stop those writes too. Until the write
+		// half is settled, both send — so this task's recipients should stay
+		// narrow.
+		{
+			Name:     queryHoursReportTaskName,
+			Schedule: scheduleFor(scheduleOverrides, queryHoursReportTaskName, "30 18 * * 0"),
+			Handler: queryhoursweekly.SendReport(
+				queryHoursReportClient, emailClient,
+				queryHoursReportTo, queryHoursReportCc,
+				salesforceBaseURL, alertsEnabled,
+			),
+			To: queryHoursReportTo,
+			Cc: queryHoursReportCc,
 		},
 	}
 
