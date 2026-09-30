@@ -63,6 +63,30 @@ var caseSeverityFromEnum = map[string]domain.CaseSeverity{
 	"S4": domain.CaseSeverityLow,
 }
 
+// announcementTypeEnumValue maps CreateCaseRequest.IsSecurityAnnouncement to
+// announcement.announcement_type's announcement_type_enum literal
+// (migration 0088). Only meaningful for req.Type == "announcement" -- the
+// caller passes req.IsSecurityAnnouncement directly, never derives it from
+// anything else.
+func announcementTypeEnumValue(isSecurityAnnouncement bool) string {
+	if isSecurityAnnouncement {
+		return "SECURITY"
+	}
+	return "GENERAL"
+}
+
+// announcementTypeEnumValuePtr is announcementTypeEnumValue's nil-safe
+// counterpart for a partial update (COALESCE against the existing column
+// value) -- a nil req field must leave announcement_type untouched, not
+// silently reset it to GENERAL.
+func announcementTypeEnumValuePtr(isSecurityAnnouncement *bool) *string {
+	if isSecurityAnnouncement == nil {
+		return nil
+	}
+	v := announcementTypeEnumValue(*isSecurityAnnouncement)
+	return &v
+}
+
 // caseResolutionCodeToEnum maps domain.CaseResolutionCode (verified against
 // ServiceNow's live resolution-code picklist -- see that type's own doc
 // comment) to "case".resolution_code's real case_resolution_code_enum
@@ -215,6 +239,11 @@ type CaseRepository interface {
 	// narrowed to scope regardless of what project filter req itself carries.
 	// COUNT and SELECT are executed concurrently on separate pool connections.
 	SearchCases(ctx context.Context, req domain.SearchCasesRequest, scope SearchScope) ([]domain.SearchCaseView, int, error)
+	// AggregateCases counts the cases matching req's filters per value of
+	// groupBy (state, severity, type, engagementType, issueType, workState,
+	// account), largest bucket first. Rows with no value for the field are
+	// not counted. The caller applies any top-N cap.
+	AggregateCases(ctx context.Context, req domain.SearchCasesRequest, groupBy string, scope SearchScope) ([]domain.AggregateBucket, error)
 	// CreateCaseComment inserts a new comment row for the given case.
 	CreateCaseComment(ctx context.Context, req domain.CreateCaseCommentRequest) (domain.CaseComment, error)
 	// SearchCaseComments returns a paginated slice of comments for the given case
@@ -593,7 +622,12 @@ const createCaseFromServiceNowQuery = `
 // comment). $8 is the announcement's initial state, already resolved to
 // announcement_state_enum's literal ('OPEN' in practice -- see
 // snAnnouncementStateToEnum) by the caller, not derived here: this layer
-// stays free of ServiceNow label vocabulary. cause/closed_by_user_id/
+// stays free of ServiceNow label vocabulary. $9 is the announcement's
+// announcement_type (GENERAL/SECURITY, migration 0088), resolved from
+// req.IsSecurityAnnouncement via announcementTypeEnumValue -- reusing that
+// existing field (added for a different purpose, deciding the case's
+// default watcher audience) rather than a second, redundant flag for the
+// same underlying yes/no. cause/closed_by_user_id/
 // closed_on/resolved_on are left NULL -- all four are closure-time-only
 // fields, meaningless on a fresh row.
 //
@@ -616,8 +650,8 @@ const createAnnouncementFromServiceNowQuery = `
 		          subject, description, created_on, updated_on
 	),
 	inserted_announcement AS (
-		INSERT INTO announcement (id, state)
-		VALUES ($1, $8::announcement_state_enum)
+		INSERT INTO announcement (id, state, announcement_type)
+		VALUES ($1, $8::announcement_state_enum, $9::announcement_type_enum)
 		RETURNING id, state, closed_on
 	)
 	SELECT iwi.id, iwi.number, iwi.wso2_id, iwi.created_by,
@@ -778,7 +812,7 @@ func (r *caseRepo) CreateCaseFromServiceNow(ctx context.Context, req domain.Crea
 		row = r.db.QueryRow(ctx, createAnnouncementFromServiceNowQuery,
 			id, createdBy,
 			number, wso2ID, req.Subject, req.Description,
-			req.ProjectID, state,
+			req.ProjectID, state, announcementTypeEnumValue(req.IsSecurityAnnouncement),
 		)
 	case "service_request":
 		row = r.db.QueryRow(ctx, createServiceRequestFromServiceNowQuery,
@@ -855,8 +889,9 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		ackID, ackName, ackEmail                 *string
 		pcID, pcNum, pcType                      *string
 		rcID, rcNum                              *string
-		accountID, accountName                   *string
+		accountID, accountName, accountTier      *string
 		severity, issueType, workState, caseType *string
+		announcementType                         *string
 		state, cause, closeNotes, resolutionCode *string
 		escalationLevel                          *string
 		isEscalated                              *bool
@@ -881,7 +916,7 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		scopeArgs = append(scopeArgs, scope.ProjectIDs)
 	}
 	err := r.db.QueryRow(ctx,
-		`SELECT wi.id, wi.number, wi.wso2_id, wi.type::TEXT,
+		`SELECT wi.id, wi.number, wi.wso2_id, wi.type::TEXT, ann.announcement_type::TEXT,
 		        wi.description, c.severity::TEXT, c.issue_type::TEXT, c.work_state::TEXT,
 		        `+caseLikeStateColumn+`, `+caseLikeCauseColumn+`, `+caseLikeCloseNotesColumn+`,
 		        c.resolution_code::TEXT, c.current_escalation_level::TEXT, c.is_escalated,
@@ -892,7 +927,7 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		        d.id, d.name,
 		        dp.id, prod.name || COALESCE(' ' || pv.version, ''),
 		        prod.id, prod.name,
-		        a.id, a.name,
+		        a.id, a.name, a.support_tier::TEXT,
 		        cre.id, cre.name, sre.id, sre.name,
 		        ae.id, COALESCE(ae.name, NULLIF(TRIM(CONCAT_WS(' ', ae.first_name, ae.last_name)), '')), ae.email,
 		        ack.id, COALESCE(ack.name, NULLIF(TRIM(CONCAT_WS(' ', ack.first_name, ack.last_name)), '')), ack.email,
@@ -917,7 +952,7 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		 LEFT JOIN work_item rc_wi ON rc_wi.id = rc.id
 		 WHERE wi.id = $1 AND wi.type = ANY(`+caseLikeWorkItemTypes+`)`+scopeClause, scopeArgs...,
 	).Scan(
-		&cv.ID, &cv.Number, &internalID, &caseType,
+		&cv.ID, &cv.Number, &internalID, &caseType, &announcementType,
 		&description, &severity, &issueType, &workState,
 		&state, &cause, &closeNotes,
 		&resolutionCode, &escalationLevel, &isEscalated,
@@ -928,7 +963,7 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		&depID, &depName,
 		&dpID, &dpDisplayName,
 		&prodID, &prodName,
-		&accountID, &accountName,
+		&accountID, &accountName, &accountTier,
 		&creTeamID, &creTeamName, &sreTeamID, &sreTeamName,
 		&aeID, &aeName, &aeEmail,
 		&ackID, &ackName, &ackEmail,
@@ -942,6 +977,11 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		return domain.CaseView{}, fmt.Errorf("get case by id: %w", err)
 	}
 	cv.InternalID = stringOrEmpty(internalID)
+	// announcement_type only exists on the "announcement" extension table (a
+	// real ServiceNow field, u_announcement_type, migrated in migration
+	// 0088_announcement_add_announcement_type) -- nil for every other
+	// case-like type, where the LEFT JOIN never matches.
+	cv.AnnouncementType = announcementType
 	// work_item.description (migration 0038) has no NOT NULL constraint,
 	// unlike subject; CaseView.Description is a required (non-pointer)
 	// string, so a NULL column becomes "" rather than left unset.
@@ -1032,13 +1072,13 @@ func (r *caseRepo) GetCaseByID(ctx context.Context, id string, scope SearchScope
 		if accountName != nil {
 			name = *accountName
 		}
-		// Type (support tier) has no real column anywhere in the migrations
-		// -- account has no tier-like column at all -- so it is left "".
-		// CreTeam/SreTeam are account.cre_team_id/sre_team_id (migration
-		// 000074, ex-integration_cs_team_id), real FKs into "group" now --
-		// see accountSelectColumns' own comment in account_repo.go for the
-		// same join, added for the dedicated /accounts endpoint.
-		accountRef := &domain.AccountRef{ID: *accountID, Name: name}
+		// Type (support tier) is account.support_tier (migration 0101,
+		// BASIC/ENTERPRISE), same column GetProjectByID already reads into
+		// ProjectAccountRef.Tier. CreTeam/SreTeam are account.cre_team_id/
+		// sre_team_id, real FKs into "group" -- see accountSelectColumns' own
+		// comment in account_repo.go for the same join, added for the
+		// dedicated /accounts endpoint.
+		accountRef := &domain.AccountRef{ID: *accountID, Name: name, Type: stringOrEmpty(accountTier)}
 		if creTeamID != nil {
 			accountRef.CreTeam = &domain.EntityRef{ID: *creTeamID, Name: stringOrEmpty(creTeamName)}
 		}
@@ -1405,6 +1445,37 @@ func (r *caseRepo) UpdateCase(ctx context.Context, req domain.UpdateCaseRequest)
 		cause = string(*req.Cause)
 	}
 
+	// state=closed: a case cannot close while any child case (work_item.parent_id
+	// pointing at it; the case detail's "Child cases" list) is still open. The
+	// case detail's link dialog states this rule; nothing on this data source
+	// enforced it.
+	if state == "CLOSED" {
+		var openChild string
+		err := r.db.QueryRow(ctx, `
+			SELECT wi.number
+			FROM work_item wi
+			LEFT JOIN "case" c ON c.id = wi.id
+			`+caseLikeJoins+`
+			WHERE wi.parent_id = $1::uuid
+			  AND wi.type = ANY(`+caseLikeWorkItemTypes+`)
+			  AND COALESCE(`+caseLikeStateColumn+`, '') <> 'CLOSED'
+			LIMIT 1`, req.ID).Scan(&openChild)
+		if err == nil {
+			return domain.Case{}, nil, &apierror.ConflictError{Msg: "Cannot close this case while child case " + openChild + " is still open"}
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.Case{}, nil, fmt.Errorf("update case: check open child cases: %w", err)
+		}
+	}
+
+	// workState=ongoing: an engineer may hold only one ONGOING case. The
+	// mirrored data source enforces the same rule, so accepting a second one
+	// here would only ever surface later as a failed mirror write. Checked in
+	// a transaction serialized per assignee.
+	if req.WorkState != nil && workState == "ONGOING" {
+		return r.updateCaseEnforcingOneOngoing(ctx, req, state, severity, workState, resolutionCode, cause)
+	}
+
 	// req.Severity == nil: severity can't change, so there's nothing to
 	// race on — skip the transaction/lock overhead entirely.
 	if req.Severity == nil {
@@ -1659,12 +1730,39 @@ func (r *caseRepo) UpdateCaseAttachmentName(ctx context.Context, id, name, updat
 	return updatedOn, nil
 }
 
+// caseLikeStateSortColumn ranks caseLikeStateColumn's label by
+// case_state_enum's own declared order (migration 0023: WORK_IN_PROGRESS,
+// AWAITING_INFO, SOLUTION_PROPOSED, CLOSED, OPEN, WAITING_ON_WSO2, REOPENED)
+// rather than sorting the label as text. Native Postgres enum comparison
+// (what bare c.state ordered by before this existed) already followed that
+// declared order for CASE rows; caseLikeStateColumn casts to TEXT so every
+// case-like type can share one expression, but ORDER BY on that TEXT would
+// sort alphabetically instead -- e.g. AWAITING_INFO before CLOSED and
+// WORK_IN_PROGRESS, a real change to the customer-facing sort order. This
+// preserves the original order while still applying to every case-like type,
+// not just CASE.
+const caseLikeStateSortColumn = `CASE ` + caseLikeStateColumn + `
+	WHEN 'WORK_IN_PROGRESS' THEN 0
+	WHEN 'AWAITING_INFO' THEN 1
+	WHEN 'SOLUTION_PROPOSED' THEN 2
+	WHEN 'CLOSED' THEN 3
+	WHEN 'OPEN' THEN 4
+	WHEN 'WAITING_ON_WSO2' THEN 5
+	WHEN 'REOPENED' THEN 6
+	END`
+
 // pgSortColMap maps domain CaseSortField values to Postgres column expressions.
+// State uses caseLikeStateSortColumn, not a bare "case" column, for the same
+// reason the state filter uses caseLikeStateColumn (see that const's own doc
+// comment): "case" is a LEFT JOIN here, so a service_request/engagement/
+// security_report_analysis/announcement row's own c.state is always NULL,
+// and sorting on it left every non-CASE row unsorted by state. Severity stays
+// c.severity -- it's genuinely case-only, unlike state.
 var pgSortColMap = map[domain.CaseSortField]string{
 	domain.CaseSortFieldCreatedOn: "wi.created_on",
 	domain.CaseSortFieldUpdatedOn: "wi.updated_on",
 	domain.CaseSortFieldSeverity:  "c.severity",
-	domain.CaseSortFieldState:     "c.state",
+	domain.CaseSortFieldState:     caseLikeStateSortColumn,
 }
 
 // onboardingStatusLabels maps a projectOnboardingStatus filter value (keyed by
@@ -1708,8 +1806,25 @@ func onboardingStatusEnumLabels(values []string) ([]string, error) {
 	return out, nil
 }
 
-// SearchCases implements CaseRepository.
-func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesRequest, scope SearchScope) ([]domain.SearchCaseView, int, error) {
+// caseSearchJoins is the join set buildCaseSearchWhere's predicates refer to.
+const caseSearchJoins = `LEFT JOIN "case" c ON c.id = wi.id
+		 ` + caseLikeJoins + `
+		 LEFT JOIN project p ON p.id = wi.project_id
+		 LEFT JOIN account a ON a.id = wi.account_id
+		 LEFT JOIN "group" cre ON cre.id = a.cre_team_id
+		 LEFT JOIN "group" sre ON sre.id = a.sre_team_id
+		 LEFT JOIN deployment d ON d.id = wi.deployment_id
+		 LEFT JOIN deployed_product dp ON dp.id = wi.deployed_product_id
+		 LEFT JOIN product prod ON prod.id = dp.product_id
+		 LEFT JOIN product_version pv ON pv.id = dp.version_id
+		 LEFT JOIN "user" ae ON ae.id = wi.assigned_to_id
+		 LEFT JOIN work_item pw ON pw.id = wi.parent_id
+		 LEFT JOIN "case" rc ON rc.id = c.related_case_id
+		 LEFT JOIN work_item rc_wi ON rc_wi.id = rc.id`
+
+// buildCaseSearchWhere renders the WHERE clause (and its bound arguments) shared by
+// SearchCases and AggregateCases. It expects the joins in caseSearchJoins.
+func buildCaseSearchWhere(req domain.SearchCasesRequest, scope SearchScope) (string, []any, int, error) {
 	filterArgs := []any{}
 	argIdx := 1
 
@@ -1738,7 +1853,7 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 		DefaultTypes: true,
 	}, argIdx)
 	if err != nil {
-		return nil, 0, err
+		return "", nil, argIdx, err
 	}
 	for _, pred := range fieldPreds {
 		where += " AND " + pred
@@ -1803,6 +1918,43 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 		filterArgs = append(filterArgs, req.Parsed.ClosedEndDate)
 		argIdx++
 	}
+	// resolvedOn: "case".resolved_on (migration 0023). Case-only, like closedOn.
+	if req.Parsed.ResolvedStartDate != nil {
+		where += fmt.Sprintf(" AND c.resolved_on >= $%d", argIdx)
+		filterArgs = append(filterArgs, req.Parsed.ResolvedStartDate)
+		argIdx++
+	}
+	if req.Parsed.ResolvedEndDate != nil {
+		where += fmt.Sprintf(" AND c.resolved_on <= $%d", argIdx)
+		filterArgs = append(filterArgs, req.Parsed.ResolvedEndDate)
+		argIdx++
+	}
+	// state notIn: a row with no state satisfies it (the inverse of state in).
+	if len(req.Parsed.ExcludeStates) > 0 {
+		states := make([]string, len(req.Parsed.ExcludeStates))
+		for i, st := range req.Parsed.ExcludeStates {
+			states[i] = strings.ToUpper(string(st))
+		}
+		where += fmt.Sprintf(" AND ("+caseLikeStateColumn+" IS NULL OR "+caseLikeStateColumn+" <> ALL($%d::text[]))", argIdx)
+		filterArgs = append(filterArgs, states)
+		argIdx++
+	}
+	// projectType: matched on project_type.name (p is the LEFT JOIN above).
+	if len(req.Parsed.ProjectTypeNames) > 0 {
+		where += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM project_type pt WHERE pt.id = p.project_type_id AND pt.name = ANY($%d::text[]))", argIdx)
+		filterArgs = append(filterArgs, req.Parsed.ProjectTypeNames)
+		argIdx++
+	}
+	// slaBreached: at least one SLA row of the case has breached. NOTE: the
+	// ServiceNow side restricts this to ten named SLA definitions; this
+	// matches any breached row until that list is mapped onto sla_policy.
+	if req.Parsed.HasBreachedSLA != nil {
+		if *req.Parsed.HasBreachedSLA {
+			where += " AND EXISTS (SELECT 1 FROM sla bs WHERE bs.work_item_id = wi.id AND bs.has_breached IS TRUE)"
+		} else {
+			where += " AND NOT EXISTS (SELECT 1 FROM sla bs WHERE bs.work_item_id = wi.id AND bs.has_breached IS TRUE)"
+		}
+	}
 	if req.Parsed.StartCreatedDate != nil {
 		where += fmt.Sprintf(" AND wi.created_on >= $%d", argIdx)
 		filterArgs = append(filterArgs, req.Parsed.StartCreatedDate)
@@ -1830,7 +1982,7 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 	if len(req.Parsed.ProjectOnboardingStatuses) > 0 {
 		labels, err := onboardingStatusEnumLabels(req.Parsed.ProjectOnboardingStatuses)
 		if err != nil {
-			return nil, 0, err
+			return "", nil, argIdx, err
 		}
 		where += fmt.Sprintf(" AND p.onboarding_status = ANY($%d::text[]::onboarding_status_enum[])", argIdx)
 		filterArgs = append(filterArgs, labels)
@@ -1839,7 +1991,7 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 	if len(req.Parsed.ExcludeProjectOnboardingStatuses) > 0 {
 		labels, err := onboardingStatusEnumLabels(req.Parsed.ExcludeProjectOnboardingStatuses)
 		if err != nil {
-			return nil, 0, err
+			return "", nil, argIdx, err
 		}
 		where += fmt.Sprintf(" AND (p.onboarding_status IS NULL OR p.onboarding_status <> ALL($%d::text[]::onboarding_status_enum[]))", argIdx)
 		filterArgs = append(filterArgs, labels)
@@ -1912,7 +2064,7 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 		for _, g := range req.Parsed.OrGroups {
 			preds, branchArgs, next, err := caseFieldPredicates(caseFieldSetFromGroup(g), argIdx)
 			if err != nil {
-				return nil, 0, err
+				return "", nil, argIdx, err
 			}
 			filterArgs = append(filterArgs, branchArgs...)
 			argIdx = next
@@ -1933,6 +2085,16 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 		argIdx++
 	}
 
+	return where, filterArgs, argIdx, nil
+}
+
+// SearchCases implements CaseRepository.
+func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesRequest, scope SearchScope) ([]domain.SearchCaseView, int, error) {
+	where, filterArgs, argIdx, err := buildCaseSearchWhere(req, scope)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	sortCol := pgSortColMap[req.SortBy.Field]
 	sortDir := string(req.SortBy.Order)
 
@@ -1942,20 +2104,7 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 	// and "announcement" rows have no deployment/deployed-product at all
 	// (see validateCreateCaseRequest) -- an INNER join would silently drop
 	// them from every search result.
-	joins := `LEFT JOIN "case" c ON c.id = wi.id
-		 ` + caseLikeJoins + `
-		 LEFT JOIN project p ON p.id = wi.project_id
-		 LEFT JOIN account a ON a.id = wi.account_id
-		 LEFT JOIN "group" cre ON cre.id = a.cre_team_id
-		 LEFT JOIN "group" sre ON sre.id = a.sre_team_id
-		 LEFT JOIN deployment d ON d.id = wi.deployment_id
-		 LEFT JOIN deployed_product dp ON dp.id = wi.deployed_product_id
-		 LEFT JOIN product prod ON prod.id = dp.product_id
-		 LEFT JOIN product_version pv ON pv.id = dp.version_id
-		 LEFT JOIN "user" ae ON ae.id = wi.assigned_to_id
-		 LEFT JOIN work_item pw ON pw.id = wi.parent_id
-		 LEFT JOIN "case" rc ON rc.id = c.related_case_id
-		 LEFT JOIN work_item rc_wi ON rc_wi.id = rc.id`
+	joins := caseSearchJoins
 
 	countQuery := "SELECT COUNT(*) FROM work_item wi " + joins + " " + where
 
@@ -2943,4 +3092,124 @@ func (r *caseRepo) SearchCaseActivities(ctx context.Context, req domain.SearchCa
 	}
 
 	return activity, total, nil
+}
+
+// updateCaseEnforcingOneOngoing is UpdateCase's workState=ONGOING path. It
+// takes a transaction-scoped advisory lock keyed on the case's assignee (two
+// concurrent requests for two different cases of the same engineer share no
+// row to lock), rejects the update with a ConflictError naming the engineer's
+// other ONGOING case, then runs the normal update in the same transaction.
+// An unassigned case has no engineer to conflict with and proceeds.
+func (r *caseRepo) updateCaseEnforcingOneOngoing(ctx context.Context, req domain.UpdateCaseRequest, state, severity, workState, resolutionCode, cause string) (domain.Case, *domain.CaseSeverity, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return domain.Case{}, nil, fmt.Errorf("update case: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var assignee *string
+	err = tx.QueryRow(ctx, `SELECT assigned_to_id::TEXT FROM work_item WHERE id = $1 AND type = 'CASE'`, req.ID).Scan(&assignee)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Case{}, nil, &apierror.NotFoundError{Msg: "case not found"}
+	}
+	if err != nil {
+		return domain.Case{}, nil, fmt.Errorf("update case: read assignee: %w", err)
+	}
+	if assignee != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('case-ongoing:' || $1::TEXT, 0))`, *assignee); err != nil {
+			return domain.Case{}, nil, fmt.Errorf("update case: lock assignee: %w", err)
+		}
+		var otherNumber string
+		err := tx.QueryRow(ctx, `
+			SELECT wi.number
+			FROM work_item wi JOIN "case" c ON c.id = wi.id
+			WHERE wi.assigned_to_id = $1::uuid AND wi.id <> $2::uuid
+			  AND c.work_state = 'ONGOING' AND c.state <> 'CLOSED'
+			ORDER BY wi.updated_on DESC LIMIT 1`, *assignee, req.ID).Scan(&otherNumber)
+		if err == nil {
+			return domain.Case{}, nil, &apierror.ConflictError{Msg: "Cannot set work state to Ongoing: the assigned engineer already has an Ongoing case: " + otherNumber}
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.Case{}, nil, fmt.Errorf("update case: check ongoing cases: %w", err)
+		}
+	}
+
+	c, err := scanUpdatedCase(tx.QueryRow(ctx, updateCaseQuery, req.ID, state, severity, workState, resolutionCode, cause, req.CloseNotes))
+	if err != nil {
+		return domain.Case{}, nil, fmt.Errorf("update case: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Case{}, nil, fmt.Errorf("update case: commit tx: %w", err)
+	}
+	return c, c.Severity, nil
+}
+
+// caseAggregateColumns maps an aggregate/group-by field to the SQL expression
+// buckets are keyed on (over caseSearchJoins) and the expression the bucket
+// label is read from.
+var caseAggregateColumns = map[string]struct{ key, label string }{
+	"state":          {caseLikeStateColumn, caseLikeStateColumn},
+	"severity":       {"c.severity::TEXT", "c.severity::TEXT"},
+	"type":           {"wi.type::TEXT", "wi.type::TEXT"},
+	"engagementType": {"eng.type::TEXT", "eng.type::TEXT"},
+	"issueType":      {"c.issue_type::TEXT", "c.issue_type::TEXT"},
+	"workState":      {"c.work_state::TEXT", "c.work_state::TEXT"},
+	"account":        {"wi.account_id::TEXT", "a.name"},
+}
+
+// AggregateCases implements CaseRepository. It shares buildCaseSearchWhere with
+// SearchCases, so a bucket count always agrees with the same search's total.
+func (r *caseRepo) AggregateCases(ctx context.Context, req domain.SearchCasesRequest, groupBy string, scope SearchScope) ([]domain.AggregateBucket, error) {
+	col, ok := caseAggregateColumns[groupBy]
+	if !ok {
+		return nil, &apierror.ValidationError{Msg: "groupBy contains invalid value: " + groupBy}
+	}
+	where, args, _, err := buildCaseSearchWhere(req, scope)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`
+		SELECT %s AS bucket_key, MAX(%s) AS bucket_label, COUNT(*) AS bucket_count
+		FROM work_item wi %s %s AND %s IS NOT NULL
+		GROUP BY bucket_key
+		ORDER BY bucket_count DESC, bucket_key`, col.key, col.label, caseSearchJoins, where, col.key)
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate cases: %w", err)
+	}
+	defer rows.Close()
+
+	buckets := []domain.AggregateBucket{}
+	for rows.Next() {
+		var key string
+		var label *string
+		var count int
+		if err := rows.Scan(&key, &label, &count); err != nil {
+			return nil, fmt.Errorf("scan case bucket: %w", err)
+		}
+		k, l := aggregateBucketKey(groupBy, key), stringOrEmpty(label)
+		if l == "" || groupBy != "account" {
+			l = k
+		}
+		buckets = append(buckets, domain.AggregateBucket{Key: k, Label: l, Count: count})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate case buckets: %w", err)
+	}
+	return buckets, nil
+}
+
+// aggregateBucketKey converts a stored enum label to the domain value the
+// case search contract uses (lower-case, severity via caseSeverityFromEnum);
+// account keys are UUIDs and pass through.
+func aggregateBucketKey(groupBy, raw string) string {
+	switch groupBy {
+	case "account":
+		return raw
+	case "severity":
+		if v, ok := caseSeverityFromEnum[raw]; ok {
+			return string(v)
+		}
+	}
+	return strings.ToLower(raw)
 }
