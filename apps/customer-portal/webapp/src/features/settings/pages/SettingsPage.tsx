@@ -19,13 +19,13 @@ import { useParams } from "react-router";
 import { useState, useMemo, useEffect, type JSX } from "react";
 import useGetUserDetails from "@features/settings/api/useGetUserDetails";
 import useGetProjectDetails from "@api/useGetProjectDetails";
+import useCustomerPermissions from "@hooks/useCustomerPermissions";
 import TabBar from "@components/tab-bar/TabBar";
 import SettingsAiAssistant from "@features/settings/components/SettingsAiAssistant";
 import SettingsDisplay from "@features/settings/components/SettingsDisplay";
 import SettingsUserManagement from "@features/settings/components/SettingsUserManagement";
 import SettingsRegistryTokens from "@features/settings/components/SettingsRegistryTokens";
 import {
-  SETTINGS_CUSTOMER_ADMIN_ROLE,
   SETTINGS_PAGE_TABS,
   SETTINGS_PROJECT_NOT_FOUND_MESSAGE,
 } from "@features/settings/constants/settingsConstants";
@@ -34,6 +34,7 @@ import { resolveSettingsPageTabId } from "@features/settings/utils/settingsPage"
 import { consumePendingSettingsTab } from "@features/settings/utils/settingsStorage";
 import { ProjectType } from "@/types/permission";
 import { isProjectRestricted } from "@utils/permission";
+import { hasCustomerAdminRole } from "@features/settings/utils/settings";
 
 /**
  * Settings page with User Management and AI Assistant tabs.
@@ -52,9 +53,17 @@ export default function SettingsPage(): JSX.Element {
   const { data: projectDetails } = useGetProjectDetails(projectId || "");
 
   const isCustomerAdmin = useMemo(
-    () => (userDetails?.roles ?? []).includes(SETTINGS_CUSTOMER_ADMIN_ROLE),
+    () => hasCustomerAdminRole(userDetails?.roles),
     [userDetails?.roles],
   );
+
+  // The AI Assistant settings save through PATCH /projects/{id}, which the
+  // backend gates on projects:update. Deriving the UI from the same permission
+  // keeps the two from disagreeing: previously the toggle was enabled for any
+  // customer_admin, who is read-only on Projects, so saving returned 403. If
+  // that is the wrong policy, change the matrix rather than this call site.
+  const { can } = useCustomerPermissions();
+  const canUpdateProject = can("projects", "update");
 
   const isRestricted = isProjectRestricted(projectDetails?.closureState);
 
@@ -121,7 +130,7 @@ export default function SettingsPage(): JSX.Element {
         />
       )}
       {displayTab === SettingsPageTabId.AI && (
-        <SettingsAiAssistant projectId={projectId} canEdit={isCustomerAdmin} />
+        <SettingsAiAssistant projectId={projectId} canEdit={canUpdateProject} />
       )}
       {displayTab === SettingsPageTabId.REGISTRY_TOKENS && (
         <SettingsRegistryTokens

@@ -33,10 +33,11 @@ func testAccessConfig() AccessConfig {
 		Escalator:            []string{"test-escalator"},
 		AttachmentDownloader: []string{"test-attachment-downloader"},
 		UsageMetricsViewer:   []string{"test-usage-metrics-viewer"},
-		SupportEngineer:      []string{"test-support-engineer"},
+		CsEngineer:           []string{"test-cs-engineer"},
 		Admin:                []string{"test-admin"},
 		TimecardApprover:     []string{"test-timecard-approver"},
 		DashboardDesigner:    []string{"test-dashboard-designer"},
+		SalesSolutions:       []string{"test-sales-solutions"},
 	}
 }
 
@@ -56,7 +57,13 @@ func serveWithRoles(g *AccessGuard, perm Permission, roles []string) (status int
 }
 
 func TestAccessGuard_PermissionMatrix(t *testing.T) {
-	all := []Permission{PermView, PermViewOperations, PermTimeCardsAndUpdates, PermEscalate, PermDownloadAttachment, PermWrite}
+	// csEngineerPerms is every route permission cs_engineer holds. PermAdmin,
+	// PermEscalate, and PermApproveTimeCard are deliberately excluded and
+	// tested separately below -- escalating and approving a time card are
+	// each a dedicated responsibility cs_engineer does not share, the same
+	// way PermAdmin doesn't.
+	csEngineerPerms := []Permission{PermView, PermViewOperations, PermTimeCardsAndUpdates, PermDownloadAttachment, PermWrite, PermViewSecurityCenter, PermUsePlg}
+	all := append(append([]Permission{}, csEngineerPerms...), PermAdmin, PermEscalate, PermApproveTimeCard, PermManagePlaybooks)
 	tests := []struct {
 		name  string
 		roles []string
@@ -65,11 +72,12 @@ func TestAccessGuard_PermissionMatrix(t *testing.T) {
 		{"viewer reads only", []string{"test-viewer"}, []Permission{PermView}},
 		{"escalator can view and escalate", []string{"test-escalator"}, []Permission{PermView, PermEscalate}},
 		{"downloader can view and download", []string{"test-attachment-downloader"}, []Permission{PermView, PermDownloadAttachment}},
-		{"support engineer can do every route permission", []string{"test-support-engineer"}, all},
-		{"admin can do every route permission", []string{"test-admin"}, all},
+		{"CS engineer can do every route permission except admin-only, escalate, and approve-time-card ones", []string{"test-cs-engineer"}, csEngineerPerms},
+		{"admin can do every route permission, including admin-only ones", []string{"test-admin"}, all},
 		{"usage metrics viewer can view only", []string{"test-usage-metrics-viewer"}, []Permission{PermView}},
-		{"timecard approver can view and use time cards and updates", []string{"test-timecard-approver"}, []Permission{PermView, PermTimeCardsAndUpdates}},
+		{"timecard approver can view, use time cards and updates, and approve", []string{"test-timecard-approver"}, []Permission{PermView, PermTimeCardsAndUpdates, PermApproveTimeCard}},
 		{"dashboard designer can view only", []string{"test-dashboard-designer"}, []Permission{PermView}},
+		{"sales solutions role alone grants none of these -- it holds PermViewSharedEntity/PermSPLAccess instead, tested separately", []string{"test-sales-solutions"}, nil},
 		{"roles combine", []string{"test-viewer", "test-escalator", "test-attachment-downloader"}, []Permission{PermView, PermEscalate, PermDownloadAttachment}},
 		{"unrelated roles grant nothing", []string{"wso2-everyone", "admin", "agent", "customer"}, nil},
 		{"no roles", nil, nil},
@@ -92,6 +100,62 @@ func TestAccessGuard_PermissionMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAccessGuard_PermViewSharedEntityScope guards the fix for the finding
+// that granting sales_solutions PermView directly widened it to every
+// PermView-gated route in the backend (users, deployments, tasks, SLAs,
+// dashboards, ...), not just the accounts/projects/cases/team-members routes
+// SPL's screens actually call. PermViewSharedEntity is the narrower
+// permission those specific routes are registered with instead.
+func TestAccessGuard_PermViewSharedEntityScope(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+
+	t.Run("every PermView holder also holds PermViewSharedEntity", func(t *testing.T) {
+		for _, roles := range [][]string{
+			{"test-viewer"}, {"test-escalator"}, {"test-attachment-downloader"}, {"test-cs-engineer"},
+			{"test-admin"}, {"test-usage-metrics-viewer"}, {"test-timecard-approver"}, {"test-dashboard-designer"},
+		} {
+			if status, _ := serveWithRoles(g, PermViewSharedEntity, roles); status != http.StatusNoContent {
+				t.Errorf("roles %v: status = %d, want 204 (PermView implies PermViewSharedEntity)", roles, status)
+			}
+		}
+	})
+
+	t.Run("sales_solutions holds PermViewSharedEntity but not plain PermView or PermSPLAccess", func(t *testing.T) {
+		roles := []string{"test-sales-solutions"}
+		if status, _ := serveWithRoles(g, PermViewSharedEntity, roles); status != http.StatusNoContent {
+			t.Errorf("PermViewSharedEntity: status = %d, want 204", status)
+		}
+		if status, _ := serveWithRoles(g, PermView, roles); status != http.StatusForbidden {
+			t.Errorf("PermView: status = %d, want 403 -- sales_solutions must not gain every PermView route", status)
+		}
+		// PermSPLAccess is Viewer-gated, not sales_solutions -- see
+		// PermSPLAccess's own doc comment.
+		if status, _ := serveWithRoles(g, PermSPLAccess, roles); status != http.StatusForbidden {
+			t.Errorf("PermSPLAccess: status = %d, want 403 (Viewer-gated, not sales_solutions)", status)
+		}
+	})
+
+	// Guards PermSPLAccess's grant (Viewer, unconditionally) -- see
+	// PermSPLAccess's own doc comment for why.
+	t.Run("plain viewer holds PermSPLAccess", func(t *testing.T) {
+		if status, _ := serveWithRoles(g, PermSPLAccess, []string{"test-viewer"}); status != http.StatusNoContent {
+			t.Errorf("PermSPLAccess: status = %d, want 204", status)
+		}
+	})
+
+	// PermSPLAccess is the audience check, not the nav-default choice --
+	// a caller holding both viewer and cs_engineer still passes it, even
+	// though usePortalView.ts's cs_engineer-first precedence means they'd
+	// default to the CS/ABT nav in the webapp. See PermSPLAccess's own doc
+	// comment for why the backend deliberately doesn't exclude cs_engineer
+	// here.
+	t.Run("viewer alongside cs_engineer still holds PermSPLAccess", func(t *testing.T) {
+		if status, _ := serveWithRoles(g, PermSPLAccess, []string{"test-viewer", "test-cs-engineer"}); status != http.StatusNoContent {
+			t.Errorf("PermSPLAccess: status = %d, want 204", status)
+		}
+	})
 }
 
 func TestAccessGuard_UsesConfiguredRoleNames(t *testing.T) {
@@ -144,14 +208,15 @@ func TestAccessGuard_RolesFor(t *testing.T) {
 		{"none", nil, []string{}},
 		{"one role", []string{"test-viewer"}, []string{"viewer"}},
 		{"several roles come back in a fixed order", []string{"test-admin", "test-escalator", "test-viewer"}, []string{"viewer", "escalator", "admin"}},
-		{"support engineer", []string{"test-support-engineer"}, []string{"support_engineer"}},
+		{"CS engineer", []string{"test-cs-engineer"}, []string{"cs_engineer"}},
 		{"every role", []string{
 			"test-viewer", "test-escalator", "test-attachment-downloader",
-			"test-support-engineer", "test-usage-metrics-viewer", "test-timecard-approver",
-			"test-dashboard-designer", "test-admin",
-		}, []string{"viewer", "escalator", "attachment_downloader", "support_engineer", "usage_metrics_viewer", "timecard_approver", "dashboard_designer", "admin"}},
+			"test-cs-engineer", "test-usage-metrics-viewer", "test-timecard-approver",
+			"test-dashboard-designer", "test-admin", "test-sales-solutions",
+		}, []string{"viewer", "escalator", "attachment_downloader", "cs_engineer", "usage_metrics_viewer", "timecard_approver", "dashboard_designer", "admin", "sales_solutions"}},
 		{"unrelated roles are ignored", []string{"wso2-everyone", "agent"}, []string{}},
 		{"a duplicated held role is reported once", []string{"test-viewer", "test-viewer"}, []string{"viewer"}},
+		{"sales solutions is reported like any other portal role, alongside a real capability", []string{"test-viewer", "test-sales-solutions"}, []string{"viewer", "sales_solutions"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,17 +230,17 @@ func TestAccessGuard_RolesFor(t *testing.T) {
 
 func TestAccessGuard_RolesForUsesConfiguredNames(t *testing.T) {
 	cfg := testAccessConfig()
-	cfg.SupportEngineer = []string{"corp-se-a", "corp-se-b"}
+	cfg.CsEngineer = []string{"corp-se-a", "corp-se-b"}
 	g := NewAccessGuard(cfg)
-	if got := g.RolesFor([]string{"corp-se-b"}); !slices.Equal(got, []string{"support_engineer"}) {
-		t.Errorf("RolesFor = %v, want [support_engineer]", got)
+	if got := g.RolesFor([]string{"corp-se-b"}); !slices.Equal(got, []string{"cs_engineer"}) {
+		t.Errorf("RolesFor = %v, want [cs_engineer]", got)
 	}
-	if got := g.RolesFor([]string{"test-support-engineer"}); len(got) != 0 {
+	if got := g.RolesFor([]string{"test-cs-engineer"}); len(got) != 0 {
 		t.Errorf("RolesFor = %v, want none: the configured names replace the default", got)
 	}
 }
 
-func TestAccessGuard_OperationsAreForSupportEngineersAndAdmins(t *testing.T) {
+func TestAccessGuard_OperationsAreForCsEngineersAndAdmins(t *testing.T) {
 	g := NewAccessGuard(testAccessConfig())
 	for _, role := range []string{
 		"test-viewer", "test-escalator",
@@ -189,19 +254,19 @@ func TestAccessGuard_OperationsAreForSupportEngineersAndAdmins(t *testing.T) {
 			t.Errorf("%s reading cases and customers: status = %d, want 204", role, status)
 		}
 	}
-	for _, role := range []string{"test-support-engineer", "test-admin"} {
+	for _, role := range []string{"test-cs-engineer", "test-admin"} {
 		if status, _ := serveWithRoles(g, PermViewOperations, []string{role}); status != http.StatusNoContent {
 			t.Errorf("%s reading operations: status = %d, want 204", role, status)
 		}
 	}
 }
 
-// TestAccessGuard_ViewAllDashboardsIsForSupportEngineersAndAdmins covers
+// TestAccessGuard_ViewAllDashboardsIsForCsEngineersAndAdmins covers
 // PermViewAllDashboards directly through Permits rather than serveWithRoles:
 // unlike every other permission here, no route is ever registered with it —
 // DashboardHandler checks it itself, per dashboard, alongside the caller's
 // unconditional PermView access to the (unrestricted) dashboard list.
-func TestAccessGuard_ViewAllDashboardsIsForSupportEngineersAndAdmins(t *testing.T) {
+func TestAccessGuard_ViewAllDashboardsIsForCsEngineersAndAdmins(t *testing.T) {
 	g := NewAccessGuard(testAccessConfig())
 	for _, role := range []string{
 		"test-viewer", "test-escalator",
@@ -212,7 +277,7 @@ func TestAccessGuard_ViewAllDashboardsIsForSupportEngineersAndAdmins(t *testing.
 			t.Errorf("%s: Permits(PermViewAllDashboards) = true, want false", role)
 		}
 	}
-	for _, role := range []string{"test-support-engineer", "test-admin"} {
+	for _, role := range []string{"test-cs-engineer", "test-admin"} {
 		if !g.Permits(PermViewAllDashboards, []string{role}) {
 			t.Errorf("%s: Permits(PermViewAllDashboards) = false, want true", role)
 		}
@@ -222,9 +287,35 @@ func TestAccessGuard_ViewAllDashboardsIsForSupportEngineersAndAdmins(t *testing.
 	}
 }
 
+// TestAccessGuard_SecurityCenterIsForCsEngineersAndAdmins covers
+// PermViewSecurityCenter, which — unlike PermView — plain viewer/escalator/
+// attachment_downloader/usage_metrics_viewer/timecard_approver/
+// dashboard_designer do NOT hold, even though every one of them holds
+// PermView itself.
+func TestAccessGuard_SecurityCenterIsForCsEngineersAndAdmins(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	for _, role := range []string{
+		"test-viewer", "test-escalator",
+		"test-attachment-downloader", "test-usage-metrics-viewer",
+		"test-timecard-approver", "test-dashboard-designer",
+	} {
+		if status, _ := serveWithRoles(g, PermViewSecurityCenter, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s reading Security Center: status = %d, want 403", role, status)
+		}
+		if status, _ := serveWithRoles(g, PermView, []string{role}); status != http.StatusNoContent {
+			t.Errorf("%s reading cases and customers: status = %d, want 204", role, status)
+		}
+	}
+	for _, role := range []string{"test-cs-engineer", "test-admin"} {
+		if status, _ := serveWithRoles(g, PermViewSecurityCenter, []string{role}); status != http.StatusNoContent {
+			t.Errorf("%s reading Security Center: status = %d, want 204", role, status)
+		}
+	}
+}
+
 func TestAccessGuard_UnconfiguredRolesAreHeldByNobody(t *testing.T) {
 	g := NewAccessGuard(AccessConfig{})
-	for _, perm := range []Permission{PermView, PermViewOperations, PermTimeCardsAndUpdates, PermEscalate, PermDownloadAttachment, PermWrite} {
+	for _, perm := range []Permission{PermView, PermViewOperations, PermTimeCardsAndUpdates, PermEscalate, PermDownloadAttachment, PermWrite, PermAdmin, PermViewSecurityCenter, PermApproveTimeCard, PermUsePlg, PermManagePlaybooks} {
 		if status, _ := serveWithRoles(g, perm, []string{"test-admin", "test-viewer", ""}); status != http.StatusForbidden {
 			t.Errorf("permission %d with no roles configured: status = %d, want 403", perm, status)
 		}
@@ -234,9 +325,9 @@ func TestAccessGuard_UnconfiguredRolesAreHeldByNobody(t *testing.T) {
 	}
 }
 
-func TestAccessGuard_TimeCardsAndUpdatesAreForSupportEngineersAdminsAndApprovers(t *testing.T) {
+func TestAccessGuard_TimeCardsAndUpdatesAreForCsEngineersAdminsAndApprovers(t *testing.T) {
 	g := NewAccessGuard(testAccessConfig())
-	for _, role := range []string{"test-support-engineer", "test-admin", "test-timecard-approver"} {
+	for _, role := range []string{"test-cs-engineer", "test-admin", "test-timecard-approver"} {
 		if status, _ := serveWithRoles(g, PermTimeCardsAndUpdates, []string{role}); status != http.StatusNoContent {
 			t.Errorf("%s: status = %d, want 204", role, status)
 		}
@@ -254,5 +345,68 @@ func TestAccessGuard_TimeCardsAndUpdatesAreForSupportEngineersAdminsAndApprovers
 	}
 	if status, _ := serveWithRoles(g, PermTimeCardsAndUpdates, nil); status != http.StatusForbidden {
 		t.Errorf("no roles: status = %d, want 403", status)
+	}
+}
+
+func TestAccessGuard_ApproveTimeCardIsForApproversAndAdminsOnly(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	for _, role := range []string{"test-admin", "test-timecard-approver"} {
+		if status, _ := serveWithRoles(g, PermApproveTimeCard, []string{role}); status != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", role, status)
+		}
+	}
+	// CS engineer holds the broader PermTimeCardsAndUpdates but must NOT hold
+	// this narrower one -- approving is a dedicated responsibility.
+	for _, role := range []string{
+		"test-cs-engineer", "test-viewer", "test-escalator",
+		"test-attachment-downloader", "test-usage-metrics-viewer", "test-dashboard-designer",
+	} {
+		if status, _ := serveWithRoles(g, PermApproveTimeCard, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403", role, status)
+		}
+	}
+}
+
+// TestAccessGuard_PlgIsForCsEngineersAndAdmins pins PermUsePlg as narrower than
+// PermView: every portal role holds PermView, but PLG is a worklist staff act
+// on, and a view-only role that could open it would meet a 403 on every control.
+func TestAccessGuard_PlgIsForCsEngineersAndAdmins(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	for _, role := range []string{"test-cs-engineer", "test-admin"} {
+		if status, _ := serveWithRoles(g, PermUsePlg, []string{role}); status != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", role, status)
+		}
+	}
+	for _, role := range []string{
+		"test-viewer", "test-escalator", "test-attachment-downloader",
+		"test-usage-metrics-viewer", "test-timecard-approver", "test-dashboard-designer",
+	} {
+		if status, _ := serveWithRoles(g, PermUsePlg, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s holds PermView but must not hold PermUsePlg: status = %d, want 403", role, status)
+		}
+	}
+}
+
+// TestAccessGuard_ManagePlaybooksIsAdminOnly pins the one split inside PLG: a CS
+// engineer works the queue and runs playbooks, but authoring a template is
+// admin's. It is separate from PermAdmin on purpose — see the constant's own
+// doc comment — so this asserts the CS engineer is denied rather than asserting
+// the two permissions are interchangeable.
+func TestAccessGuard_ManagePlaybooksIsAdminOnly(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	if status, _ := serveWithRoles(g, PermManagePlaybooks, []string{"test-admin"}); status != http.StatusNoContent {
+		t.Errorf("admin: status = %d, want 204", status)
+	}
+	for _, role := range []string{
+		"test-cs-engineer", "test-viewer", "test-escalator", "test-attachment-downloader",
+		"test-usage-metrics-viewer", "test-timecard-approver", "test-dashboard-designer",
+	} {
+		if status, _ := serveWithRoles(g, PermManagePlaybooks, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s must not manage playbooks: status = %d, want 403", role, status)
+		}
+	}
+	// The CS engineer keeps everything else in PLG, including running a playbook.
+	if status, _ := serveWithRoles(g, PermUsePlg, []string{"test-cs-engineer"}); status != http.StatusNoContent {
+		t.Errorf("cs engineer lost PermUsePlg: status = %d, want 204", status)
 	}
 }

@@ -38,7 +38,7 @@ func projectContactRowToDomain(row repository.ProjectContactRow) domain.ProjectC
 		Email:             row.Email,
 		RegistrationState: row.RegistrationState,
 		// NotificationsEnabled has no backing column anywhere in this
-		// schema (project_contact, migration 000022, carries no preference
+		// schema (project_contact, migration 0027, carries no preference
 		// column). Defaulted true rather than false: an invited/registered
 		// contact is assumed opted-in until a real preference column
 		// exists, matching this schema's general "absence means the
@@ -46,9 +46,13 @@ func projectContactRowToDomain(row repository.ProjectContactRow) domain.ProjectC
 		// flags read as false only when explicitly set).
 		NotificationsEnabled: true,
 		Roles:                row.Roles,
+		AccountRoles:         row.AccountRoles,
 	}
 	if pc.Roles == nil {
 		pc.Roles = []string{}
+	}
+	if pc.AccountRoles == nil {
+		pc.AccountRoles = []string{}
 	}
 	if row.ResolvedName != nil && *row.ResolvedName != "" {
 		name := *row.ResolvedName

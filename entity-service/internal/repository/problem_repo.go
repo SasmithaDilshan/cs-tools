@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
@@ -53,6 +54,12 @@ import (
 // source itself, with no fixed, confirmed transition rule set to reimplement
 // here (see domain.UpdateProblemRequest's own doc comment -- deliberately
 // not a closed enum for exactly this reason).
+//
+// CreateProblemFromServiceNow (below) is the exception, same as
+// CaseRepository.CreateCaseFromServiceNow/IncidentRepository.CreateIncidentFromServiceNow:
+// it backs DATA_SOURCE=postgres-servicenow-dual-write's SN-first problem
+// creation, where id/number come from ServiceNow rather than being generated
+// here.
 type ProblemRepository interface {
 	// SearchProblems returns a filtered, paginated slice of problems
 	// together with the total count of matching rows before pagination.
@@ -64,6 +71,73 @@ type ProblemRepository interface {
 	// GetProblem returns the full detail of a single problem by its UUID,
 	// or a NotFoundError if no matching row exists.
 	GetProblem(ctx context.Context, id string) (domain.ProblemDetail, error)
+	// CreateProblemFromServiceNow inserts a new problem row (both work_item
+	// and "problem"), for DATA_SOURCE=postgres-servicenow-dual-write's
+	// SN-first problem creation (see
+	// problemService.createProblemSNFirst's own doc comment). Unlike
+	// CaseRepository.CreateCaseFromServiceNow, no wso2ID parameter exists
+	// here: work_item.wso2_id is only required (by the
+	// work_item_wso2_id_required_by_type CHECK constraint, migration 0021)
+	// for CASE/SERVICE_REQUEST/ANNOUNCEMENT/ENGAGEMENT/
+	// SECURITY_REPORT_ANALYSIS -- PROBLEM is deliberately excluded from that
+	// list, and ServiceNow's own problem-create response
+	// (snCreateProblemResponse/snProblemDetailResponse) has no equivalent
+	// field to supply one from anyway.
+	//
+	// Unlike CreateCaseFromServiceNow/CreateIncidentFromServiceNow, createdBy
+	// is NOT taken from ServiceNow's response -- snProblemDetailResponse
+	// (the shape ServiceNow's problem create endpoint actually returns) has
+	// no createdBy/createdOn field at all, unlike case/incident/change
+	// request. The caller (problemService.createProblemSNFirst) instead
+	// resolves createdBy from the requesting user's own JWT email claim
+	// (same middleware.UserIDTokenFromContext + emailFromJWT chain
+	// caseService.CreateCase already uses when req.CreatedBy is empty) --
+	// the calling user's identity is the only real signal for who actually
+	// created the problem, since ServiceNow's own response gives none.
+	//
+	// state is the raw, already-confirmed ServiceNow state label
+	// (snProblemDetailResponse.State) if ServiceNow returned one -- unlike
+	// change_request's create response, problem's DOES return a state that
+	// matches problem_state_enum's own labels by identity (see this file's
+	// own package doc comment), so it is safe to cast straight through
+	// rather than leaving the column NULL the way
+	// CreateChangeRequestFromServiceNow does.
+	//
+	// id must be a canonical UUID (sysidToUUID(sn sys_id)). Returns a
+	// ValidationError if id is not a valid UUID or state is not a valid
+	// problem_state_enum label, or a ConflictError if a row already exists
+	// for id/number (unique violation) -- the latter should not happen in
+	// practice since ServiceNow only just generated these, but is reported
+	// precisely rather than as an opaque infrastructure error if it ever
+	// does.
+	//
+	// req.Category is normalized to uppercase and written to
+	// problem.category. req.Subcategory is matched case-insensitively against
+	// problem_subcategory.value within that category; unmatched values remain
+	// NULL.
+	CreateProblemFromServiceNow(ctx context.Context, req domain.CreateProblemRequest, id, number, createdBy string, state *string) (domain.ProblemDetail, error)
+
+	// UpdateProblemFields writes any subset of the PATCH /problems/{id}
+	// fields that have an unambiguous, established Postgres column mapping --
+	// req.CauseNotes/FixNotes/Workaround/TargetResolutionDate (problem.cause_notes/
+	// fix_notes/workaround/due_on) and req.AssignedToID (work_item.assigned_to_id,
+	// the same generic column CaseRepository.UpdateCaseFields already writes for
+	// "case"). req.Transition and req.AssignmentGroupID are rejected earlier, by
+	// problemService.UpdateProblem's own validation -- there is no
+	// state-transition rule set or assignment-group column to apply them to
+	// (see this file's own package doc comment) -- so this method never sees
+	// them set.
+	//
+	// work_item.updated_on/updated_by are bumped unconditionally, matching
+	// UpdateCaseFields' identical convention, using actorEmail (the caller's
+	// own JWT email, resolved by problemService.resolveActorEmail) as
+	// updated_by.
+	//
+	// Returns a NotFoundError if id does not name an existing PROBLEM work
+	// item, or a ValidationError if assignedToId does not reference a real
+	// user row (FK violation) or targetResolutionDate is not a valid RFC3339
+	// timestamp.
+	UpdateProblemFields(ctx context.Context, req domain.UpdateProblemRequest, actorEmail string) (time.Time, error)
 }
 
 type problemRepo struct {
@@ -255,7 +329,7 @@ func (r *problemRepo) AggregateProblems(ctx context.Context, req domain.SearchPr
 // GetProblem implements ProblemRepository.
 func (r *problemRepo) GetProblem(ctx context.Context, id string) (domain.ProblemDetail, error) {
 	query := `
-		SELECT wi.id, wi.number, wi.subject, pr.state::TEXT, pr.priority::TEXT,
+		SELECT wi.id, wi.number, wi.subject, wi.description, pr.state::TEXT, pr.priority::TEXT,
 		       pr.category::TEXT, sc.label,
 		       origin_case.id, origin_case.number,
 		       primary_inc.id, primary_inc_wi.number,
@@ -269,6 +343,7 @@ func (r *problemRepo) GetProblem(ctx context.Context, id string) (domain.Problem
 
 	var (
 		id2, number, subject             string
+		description                      *string
 		state, priority                  *string
 		category, subcategoryLabel       *string
 		originCaseID, originCaseNumber   *string
@@ -282,7 +357,7 @@ func (r *problemRepo) GetProblem(ctx context.Context, id string) (domain.Problem
 		openedOn, closedOn               *time.Time
 	)
 	err := r.db.QueryRow(ctx, query, id).Scan(
-		&id2, &number, &subject, &state, &priority,
+		&id2, &number, &subject, &description, &state, &priority,
 		&category, &subcategoryLabel,
 		&originCaseID, &originCaseNumber,
 		&priIncID, &priIncNumber,
@@ -300,7 +375,7 @@ func (r *problemRepo) GetProblem(ctx context.Context, id string) (domain.Problem
 	}
 
 	d := domain.ProblemDetail{
-		ID: &id2, Number: &number, Subject: &subject, State: state, Priority: priority,
+		ID: &id2, Number: &number, Subject: &subject, Description: description, State: state, Priority: priority,
 		Category: category, Subcategory: subcategoryLabel,
 		ResolutionCode: resolutionCode, CauseNotes: causeNotes, FixNotes: fixNotes, Workaround: workaround,
 	}
@@ -359,4 +434,175 @@ func (r *problemRepo) GetProblem(ctx context.Context, id string) (domain.Problem
 	}
 
 	return d, nil
+}
+
+// createProblemFromServiceNowQuery inserts both halves of a problem row
+// (work_item + problem, the same shared-primary-key pattern
+// createIncidentFromServiceNowQuery documents) in one round trip via a CTE,
+// using caller-supplied identity (id/number/createdBy) rather than
+// generating any of it -- see CreateProblemFromServiceNow's own doc comment
+// for why, and for which req fields are deliberately left unwritten. type is
+// hardcoded to 'PROBLEM'::work_item_type_enum. state is cast from
+// ServiceNow's own confirmed response value when present (unlike
+// change_request, whose create response carries no state at all -- see
+// CreateChangeRequestFromServiceNow's own doc comment for that contrast);
+// when ServiceNow returns no state, the column is left NULL rather than
+// guessed.
+//
+// Column/output order matches the trailing SELECT exactly.
+const createProblemFromServiceNowQuery = `
+	WITH inserted_work_item AS (
+		INSERT INTO work_item (
+			id, created_on, updated_on, created_by, updated_by,
+			number, subject, description, type, parent_id
+		)
+		VALUES (
+			$1, NOW(), NOW(), $2, $2,
+			$3, $4, $8, 'PROBLEM'::work_item_type_enum, $5::uuid
+		)
+		RETURNING id, number, subject, description, created_on, updated_on, created_by
+	),
+	inserted_problem AS (
+		INSERT INTO problem (
+			id, state, incident_id, opened_on, category, subcategory_id
+		)
+		VALUES (
+			$1, $6::problem_state_enum, $7::uuid, NOW(), $9::problem_category_enum,
+			-- subcategory is matched on problem_subcategory.value (lower-case
+			-- free text) within the chosen category; an unmatched value stays NULL.
+			(SELECT id FROM problem_subcategory WHERE category = $9::problem_category_enum AND value = LOWER($10::text))
+		)
+		RETURNING id
+	)
+	SELECT iwi.id, iwi.number, iwi.subject, iwi.description, iwi.created_on, iwi.updated_on, iwi.created_by
+	FROM inserted_work_item iwi
+	JOIN inserted_problem ip ON ip.id = iwi.id`
+
+// CreateProblemFromServiceNow implements ProblemRepository.
+func (r *problemRepo) CreateProblemFromServiceNow(ctx context.Context, req domain.CreateProblemRequest, id, number, createdBy string, state *string) (domain.ProblemDetail, error) {
+	var category *string
+	if req.Category != nil && strings.TrimSpace(*req.Category) != "" {
+		v := strings.ToUpper(strings.TrimSpace(*req.Category))
+		category = &v
+	}
+	var (
+		outID, outNumber, outSubject, outCreatedBy string
+		outDescription                             *string
+		outCreatedOn, outUpdatedOn                 time.Time
+	)
+	err := r.db.QueryRow(ctx, createProblemFromServiceNowQuery,
+		id, createdBy,
+		number, req.Subject, req.OriginCaseID,
+		state, req.PrimaryIncidentID, req.Description,
+		category, req.Subcategory,
+	).Scan(&outID, &outNumber, &outSubject, &outDescription, &outCreatedOn, &outUpdatedOn, &outCreatedBy)
+	if err != nil {
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case "23505": // unique_violation on id/number -- see this method's own doc comment for why this "shouldn't" happen
+				return domain.ProblemDetail{}, &apierror.ConflictError{Msg: "a problem already exists for this ServiceNow id/number: " + pgErr.Detail}
+			case "22P02": // invalid_text_representation -- id (or state) was not a valid UUID/enum label
+				return domain.ProblemDetail{}, &apierror.ValidationError{Msg: "id is not a valid UUID, or state is not a valid problem state: " + id}
+			case "22001": // string_data_right_truncation -- e.g. subject over work_item.subject's VARCHAR(512)
+				return domain.ProblemDetail{}, &apierror.ValidationError{Msg: "a field value is too long: " + pgErr.Message}
+			case "23503": // foreign_key_violation -- one of the referenced IDs does not exist
+				return domain.ProblemDetail{}, &apierror.ValidationError{Msg: "one or more referenced IDs do not exist: " + pgErr.Detail}
+			case "P0001": // raise_exception from integrity triggers
+				return domain.ProblemDetail{}, &apierror.ValidationError{Msg: pgErr.Message}
+			}
+		}
+		return domain.ProblemDetail{}, fmt.Errorf("create problem from servicenow: %w", err)
+	}
+
+	return domain.ProblemDetail{
+		ID:          &outID,
+		Number:      &outNumber,
+		Subject:     &outSubject,
+		Description: outDescription,
+		State:       state,
+	}, nil
+}
+
+// UpdateProblemFields implements ProblemRepository. "problem" is updated
+// first (if it has any columns to touch), so a nonexistent id is caught
+// before work_item's own row is touched at all -- if req names no "problem"
+// column (i.e. only AssignedToID was set), work_item's own
+// UPDATE ... WHERE id = $1 AND type = 'PROBLEM' alone still correctly
+// reports not-found, and the explicit type check keeps this from silently
+// bumping updated_on/updated_by on a work_item row of some other type that
+// happens to share the id (same shared-primary-key space every work_item
+// extension table uses). Same overall shape as
+// CaseRepository.UpdateCaseFields.
+func (r *problemRepo) UpdateProblemFields(ctx context.Context, req domain.UpdateProblemRequest, actorEmail string) (time.Time, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("update problem fields: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var problemSets []string
+	problemArgs := []any{req.ID}
+	idx := 2
+	if req.CauseNotes != nil {
+		problemSets = append(problemSets, fmt.Sprintf("cause_notes = $%d", idx))
+		problemArgs = append(problemArgs, *req.CauseNotes)
+		idx++
+	}
+	if req.FixNotes != nil {
+		problemSets = append(problemSets, fmt.Sprintf("fix_notes = $%d", idx))
+		problemArgs = append(problemArgs, *req.FixNotes)
+		idx++
+	}
+	if req.Workaround != nil {
+		problemSets = append(problemSets, fmt.Sprintf("workaround = $%d", idx))
+		problemArgs = append(problemArgs, *req.Workaround)
+		idx++
+	}
+	if req.TargetResolutionDate != nil {
+		t, err := time.Parse(time.RFC3339, *req.TargetResolutionDate)
+		if err != nil {
+			return time.Time{}, &apierror.ValidationError{Msg: "targetResolutionDate must be a valid RFC3339 timestamp"}
+		}
+		problemSets = append(problemSets, fmt.Sprintf("due_on = $%d", idx))
+		problemArgs = append(problemArgs, t)
+		idx++
+	}
+	if len(problemSets) > 0 {
+		tag, err := tx.Exec(ctx, `UPDATE problem SET `+strings.Join(problemSets, ", ")+` WHERE id = $1`, problemArgs...)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("update problem fields: problem: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return time.Time{}, &apierror.NotFoundError{Msg: "problem not found"}
+		}
+	}
+
+	// work_item.updated_on/updated_by are bumped unconditionally, matching
+	// UpdateCaseFields' identical convention, even when only "problem"
+	// columns above changed.
+	wiSets := []string{"updated_on = NOW()", "updated_by = $2"}
+	wiArgs := []any{req.ID, actorEmail}
+	widx := 3
+	if req.AssignedToID != nil {
+		wiSets = append(wiSets, fmt.Sprintf("assigned_to_id = $%d::uuid", widx))
+		wiArgs = append(wiArgs, *req.AssignedToID)
+		widx++
+	}
+
+	var updatedOn time.Time
+	err = tx.QueryRow(ctx, `UPDATE work_item SET `+strings.Join(wiSets, ", ")+` WHERE id = $1 AND type = 'PROBLEM' RETURNING updated_on`, wiArgs...).Scan(&updatedOn)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, &apierror.NotFoundError{Msg: "problem not found"}
+	}
+	if err != nil {
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return time.Time{}, &apierror.ValidationError{Msg: "assignedToId does not exist: " + pgErr.Detail}
+		}
+		return time.Time{}, fmt.Errorf("update problem fields: work_item: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("update problem fields: commit tx: %w", err)
+	}
+	return updatedOn, nil
 }

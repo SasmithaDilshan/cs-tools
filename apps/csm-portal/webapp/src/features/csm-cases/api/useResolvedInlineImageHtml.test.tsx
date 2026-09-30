@@ -26,7 +26,7 @@ const { postMock, getBlobMock, sftpgoFlag, userRoles } = vi.hoisted(() => ({
   // Defaults to a role that can download attachments, so the existing
   // resolution tests below exercise the real fetch/data-URL path; the
   // permission tests further down override this per-case.
-  userRoles: { value: ["support_engineer"] as string[] },
+  userRoles: { value: ["cs_engineer"] as string[] },
 }));
 
 vi.mock("@api/backend/client", () => ({
@@ -63,7 +63,7 @@ describe("useResolvedInlineImageHtml", () => {
     postMock.mockReset();
     getBlobMock.mockReset();
     sftpgoFlag.enabled = false;
-    userRoles.value = ["support_engineer"];
+    userRoles.value = ["cs_engineer"];
   });
 
   it("flag off: resolves via GET /attachments/{id}/content into a data: URL", async () => {
@@ -144,5 +144,38 @@ describe("useResolvedInlineImageHtml", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(getBlobMock).toHaveBeenCalledTimes(1);
     expect(result.current.resolvedHtml).toContain("data:image/png;base64,");
+  });
+
+  // A raw base64-embedded image (content authored before/without SFTPGo
+  // attachment storage) has no .iix reference at all -- nothing to fetch,
+  // since there's no separate attachment record. See
+  // useResolvedInlineImageHtml's own doc comment for why this still needs
+  // hiding, even though the underlying content already reached the browser.
+  const RAW_BASE64_HTML =
+    '<p>see <img src="data:image/png;base64,AAAA"></p>';
+
+  it("without the attachment-download role, a raw base64 image is hidden behind the permission placeholder", () => {
+    userRoles.value = ["viewer"];
+
+    const { result } = renderHook(
+      () => useResolvedInlineImageHtml(RAW_BASE64_HTML),
+      { wrapper },
+    );
+
+    expect(postMock).not.toHaveBeenCalled();
+    expect(getBlobMock).not.toHaveBeenCalled();
+    expect(result.current.resolvedHtml).not.toContain("<img");
+    expect(result.current.resolvedHtml).toContain(
+      'data-unresolved-reason="permission"',
+    );
+  });
+
+  it("with the attachment-download role, a raw base64 image renders as-is", () => {
+    const { result } = renderHook(
+      () => useResolvedInlineImageHtml(RAW_BASE64_HTML),
+      { wrapper },
+    );
+
+    expect(result.current.resolvedHtml).toBe(RAW_BASE64_HTML);
   });
 });

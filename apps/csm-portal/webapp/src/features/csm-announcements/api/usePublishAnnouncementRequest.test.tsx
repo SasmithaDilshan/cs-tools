@@ -19,13 +19,15 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const postEmptyMock = vi.fn();
+const postMock = vi.fn();
 const showErrorMock = vi.fn();
 const postCaseMutateAsyncMock = vi.fn();
 const addTagMutateAsyncMock = vi.fn();
+const recordDeliveriesMutateAsyncMock = vi.fn();
+const listDeliveriesMock = vi.fn();
 
 vi.mock("@api/backend/client", () => ({
-  useBackendApi: () => ({ postEmpty: postEmptyMock }),
+  useBackendApi: () => ({ post: postMock }),
 }));
 vi.mock("@context/error-banner/ErrorBannerContext", () => ({
   useErrorBanner: () => ({ showError: showErrorMock }),
@@ -35,6 +37,16 @@ vi.mock("@features/csm-cases/api/usePostCsmCase", () => ({
 }));
 vi.mock("@features/csm-cases/api/useCaseTags", () => ({
   useAddTagToCase: () => ({ mutateAsync: addTagMutateAsyncMock }),
+}));
+// Mocked as their own modules (not through the shared postMock above) so
+// every existing test's assumptions about postMock's own call count/
+// sequence for the real /publish call stay valid unchanged — see the
+// dedicated "delivery ledger" describe block below for coverage of these.
+vi.mock("@features/csm-announcements/api/useRecordAnnouncementRequestDeliveries", () => ({
+  useRecordAnnouncementRequestDeliveries: () => ({ mutateAsync: recordDeliveriesMutateAsyncMock }),
+}));
+vi.mock("@features/csm-announcements/api/useListAnnouncementRequestDeliveries", () => ({
+  useListAnnouncementRequestDeliveries: () => listDeliveriesMock(),
 }));
 
 // Imported after the mocks above so the module picks them up.
@@ -62,10 +74,19 @@ const APPROVED_REQUEST: AnnouncementRequest = {
 };
 
 beforeEach(() => {
-  postEmptyMock.mockReset();
+  postMock.mockReset();
   showErrorMock.mockReset();
   postCaseMutateAsyncMock.mockReset();
   addTagMutateAsyncMock.mockReset();
+  recordDeliveriesMutateAsyncMock.mockReset();
+  recordDeliveriesMutateAsyncMock.mockResolvedValue({ deliveries: [] });
+  listDeliveriesMock.mockReset();
+  // No persisted deliveries by default — every existing test below starts
+  // from a blank ledger, the same as before this hook read one at all.
+  // isSuccess: true since a genuinely empty ledger is still a *successful*
+  // fetch — hydration must complete (and unblock handlePublish) for it,
+  // not stay stuck treating "no rows yet" as still loading.
+  listDeliveriesMock.mockReturnValue({ data: null, isLoading: false, isError: false, isSuccess: true });
 });
 
 describe("usePublishAnnouncementRequest — guards", () => {
@@ -98,7 +119,7 @@ describe("usePublishAnnouncementRequest — full success", () => {
     postCaseMutateAsyncMock.mockImplementation(({ projectId }: { projectId: string }) =>
       Promise.resolve({ id: `case-${projectId}`, internalId: "X-1", number: "N-1" }),
     );
-    postEmptyMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
 
     const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
     await act(async () => {
@@ -109,7 +130,11 @@ describe("usePublishAnnouncementRequest — full success", () => {
     expect(postCaseMutateAsyncMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "announcement", projectId: "p-1", subject: "Scheduled maintenance" }),
     );
-    expect(postEmptyMock).toHaveBeenCalledWith("/announcement-requests/req-1/publish");
+    expect(postMock).toHaveBeenCalledWith(
+      "/announcement-requests/req-1/publish",
+      { caseIds: expect.arrayContaining(["case-p-1", "case-p-2"]) },
+    );
+    expect((postMock.mock.calls[0][1] as { caseIds: string[] }).caseIds).toHaveLength(2);
     expect(result.current.published?.state).toBe("published");
     expect(result.current.failedProjectIds).toEqual([]);
     expect(result.current.succeededProjectIds.sort()).toEqual(["p-1", "p-2"]);
@@ -117,7 +142,7 @@ describe("usePublishAnnouncementRequest — full success", () => {
 
   it("attaches the security tag per case when isSecurityAnnouncement is set", async () => {
     postCaseMutateAsyncMock.mockResolvedValue({ id: "case-1", internalId: "X-1", number: "N-1" });
-    postEmptyMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
     addTagMutateAsyncMock.mockResolvedValue({});
 
     const { result } = renderHook(
@@ -154,7 +179,7 @@ describe("usePublishAnnouncementRequest — partial failure and retry", () => {
     expect(result.current.succeededProjectIds).toEqual(["p-1"]);
     expect(result.current.failedProjectIds).toEqual(["p-2"]);
     expect(result.current.published).toBeNull();
-    expect(postEmptyMock).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
     expect(showErrorMock).toHaveBeenCalledWith(expect.stringMatching(/failed for project p-2/i));
   });
 
@@ -174,7 +199,7 @@ describe("usePublishAnnouncementRequest — partial failure and retry", () => {
 
     // Fix the failing project and retry.
     postCaseMutateAsyncMock.mockResolvedValue({ id: "case-p-2", internalId: "X-2", number: "N-2" });
-    postEmptyMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
 
     await act(async () => {
       await result.current.handlePublish();
@@ -185,12 +210,12 @@ describe("usePublishAnnouncementRequest — partial failure and retry", () => {
     expect(postCaseMutateAsyncMock).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p-2" }));
     expect(result.current.failedProjectIds).toEqual([]);
     expect(result.current.succeededProjectIds.sort()).toEqual(["p-1", "p-2"]);
-    expect(postEmptyMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries the publish call (without resending any case) when every project already succeeded but marking published failed last time", async () => {
     postCaseMutateAsyncMock.mockResolvedValue({ id: "case-1", internalId: "X-1", number: "N-1" });
-    postEmptyMock.mockRejectedValueOnce(new Error("db down"));
+    postMock.mockRejectedValueOnce(new Error("db down"));
 
     const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
     await act(async () => {
@@ -202,14 +227,14 @@ describe("usePublishAnnouncementRequest — partial failure and retry", () => {
     expect(result.current.published).toBeNull();
     postCaseMutateAsyncMock.mockClear();
 
-    postEmptyMock.mockResolvedValueOnce({ ...APPROVED_REQUEST, state: "published" });
+    postMock.mockResolvedValueOnce({ ...APPROVED_REQUEST, state: "published" });
     await act(async () => {
       await result.current.handlePublish();
     });
 
     // No case is ever recreated — only the publish call itself is retried.
     expect(postCaseMutateAsyncMock).not.toHaveBeenCalled();
-    expect(postEmptyMock).toHaveBeenCalledTimes(2);
+    expect(postMock).toHaveBeenCalledTimes(2);
     expect(result.current.published?.state).toBe("published");
   });
 });
@@ -238,7 +263,7 @@ describe("usePublishAnnouncementRequest — security-tag failure blocks publish"
     // request must not reach the terminal published state with its
     // security tag missing and no way to fix it afterward.
     expect(postCaseMutateAsyncMock).toHaveBeenCalledTimes(1);
-    expect(postEmptyMock).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it("retrying a tag-only failure re-attaches the tag to the existing case, without creating another one", async () => {
@@ -262,7 +287,7 @@ describe("usePublishAnnouncementRequest — security-tag failure blocks publish"
     addTagMutateAsyncMock.mockClear();
 
     addTagMutateAsyncMock.mockResolvedValue({});
-    postEmptyMock.mockResolvedValueOnce({ ...APPROVED_REQUEST, state: "published" });
+    postMock.mockResolvedValueOnce({ ...APPROVED_REQUEST, state: "published" });
 
     await act(async () => {
       await result.current.handlePublish();
@@ -274,5 +299,196 @@ describe("usePublishAnnouncementRequest — security-tag failure blocks publish"
     expect(addTagMutateAsyncMock).toHaveBeenCalledWith({ caseId: "case-1", label: "Security Announcement" });
     expect(result.current.failedTagProjectIds).toEqual([]);
     expect(result.current.published?.state).toBe("published");
+  });
+});
+
+describe("usePublishAnnouncementRequest — delivery ledger", () => {
+  it("records succeeded/failed outcomes for the pass after a partial failure", async () => {
+    postCaseMutateAsyncMock.mockImplementation(({ projectId }: { projectId: string }) =>
+      projectId === "p-2"
+        ? Promise.reject(new Error("boom"))
+        : Promise.resolve({ id: `case-${projectId}`, internalId: "X-1", number: "N-1" }),
+    );
+
+    const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+
+    expect(recordDeliveriesMutateAsyncMock).toHaveBeenCalledWith({
+      id: "req-1",
+      payload: {
+        deliveries: expect.arrayContaining([
+          { projectId: "p-1", caseId: "case-p-1", status: "succeeded" },
+          { projectId: "p-2", status: "failed" },
+        ]),
+      },
+    });
+  });
+
+  it("records tag_failed (with the real caseId) when the security tag attach fails", async () => {
+    postCaseMutateAsyncMock.mockResolvedValue({ id: "case-1", internalId: "X-1", number: "N-1" });
+    addTagMutateAsyncMock.mockRejectedValue(new Error("tag service down"));
+
+    const { result } = renderHook(
+      () =>
+        usePublishAnnouncementRequest({
+          ...APPROVED_REQUEST,
+          isSecurityAnnouncement: true,
+          resolvedProjectIds: ["p-1"],
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+
+    expect(recordDeliveriesMutateAsyncMock).toHaveBeenCalledWith({
+      id: "req-1",
+      payload: { deliveries: [{ projectId: "p-1", caseId: "case-1", status: "tag_failed" }] },
+    });
+  });
+
+  it("does not fail handlePublish when saving the ledger itself fails — the real cases already exist either way", async () => {
+    postCaseMutateAsyncMock.mockResolvedValue({ id: "case-1", internalId: "X-1", number: "N-1" });
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+    recordDeliveriesMutateAsyncMock.mockRejectedValue(new Error("ledger write failed"));
+
+    const { result } = renderHook(
+      () => usePublishAnnouncementRequest({ ...APPROVED_REQUEST, resolvedProjectIds: ["p-1"] }),
+      { wrapper },
+    );
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+
+    expect(result.current.published?.state).toBe("published");
+    expect(showErrorMock).toHaveBeenCalledWith(expect.stringMatching(/couldn't be saved/i));
+  });
+
+  it("hydrates from a persisted ledger so a reopened dialog resumes instead of resending to already-succeeded projects", async () => {
+    listDeliveriesMock.mockReturnValue({
+      data: {
+        deliveries: [
+          { id: "d-1", announcementRequestId: "req-1", projectId: "p-1", caseId: "case-1", status: "succeeded", createdOn: "x", updatedOn: "x" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+    postCaseMutateAsyncMock.mockResolvedValue({ id: "case-p-2", internalId: "X-1", number: "N-1" });
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+
+    const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
+
+    // Hydration seeds succeededProjectIds from the persisted ledger before
+    // handlePublish is ever called.
+    expect(result.current.succeededProjectIds).toEqual(["p-1"]);
+
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+
+    // Only p-2 (not already in the ledger) gets a real case created.
+    expect(postCaseMutateAsyncMock).toHaveBeenCalledTimes(1);
+    expect(postCaseMutateAsyncMock).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p-2" }));
+    expect(postMock).toHaveBeenCalledWith(
+      "/announcement-requests/req-1/publish",
+      { caseIds: expect.arrayContaining(["case-1", "case-p-2"]) },
+    );
+  });
+
+  it("hydrates tag_failed deliveries into both succeededProjectIds (the case is real) and failedTagProjectIds (the tag still needs a retry)", async () => {
+    listDeliveriesMock.mockReturnValue({
+      data: {
+        deliveries: [
+          { id: "d-1", announcementRequestId: "req-1", projectId: "p-1", caseId: "case-1", status: "tag_failed", createdOn: "x", updatedOn: "x" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+
+    const { result } = renderHook(
+      () =>
+        usePublishAnnouncementRequest({
+          ...APPROVED_REQUEST,
+          isSecurityAnnouncement: true,
+          resolvedProjectIds: ["p-1"],
+        }),
+      { wrapper },
+    );
+
+    expect(result.current.succeededProjectIds).toEqual(["p-1"]);
+    expect(result.current.failedTagProjectIds).toEqual(["p-1"]);
+
+    addTagMutateAsyncMock.mockResolvedValue({});
+    postMock.mockResolvedValue({ ...APPROVED_REQUEST, state: "published" });
+
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+
+    // The retry re-attaches the tag on the hydrated case id — never
+    // re-creates the case, since it was never lost to begin with.
+    expect(postCaseMutateAsyncMock).not.toHaveBeenCalled();
+    expect(addTagMutateAsyncMock).toHaveBeenCalledWith({ caseId: "case-1", label: "Security Announcement" });
+    expect(result.current.published?.state).toBe("published");
+  });
+});
+
+describe("usePublishAnnouncementRequest — readyToPublish gates handlePublish until the ledger hydrates", () => {
+  // Without this gate, clicking Publish in the narrow window before the
+  // ledger GET resolves would compute pendingProjectIds from an empty
+  // succeededProjectIds — resending a real, duplicate case to every project
+  // that already succeeded in an earlier session.
+  it("refuses to run while the ledger is still loading, and reports readyToPublish false", async () => {
+    listDeliveriesMock.mockReturnValue({ data: undefined, isLoading: true, isError: false, isSuccess: false });
+
+    const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
+
+    expect(result.current.readyToPublish).toBe(false);
+    expect(result.current.hydratingDeliveries).toBe(true);
+    expect(result.current.hydrationFailed).toBe(false);
+
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+    expect(postCaseMutateAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to run when the ledger failed to load, and exposes a retry", async () => {
+    const refetch = vi.fn();
+    listDeliveriesMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      isSuccess: false,
+      refetch,
+    });
+
+    const { result } = renderHook(() => usePublishAnnouncementRequest(APPROVED_REQUEST), { wrapper });
+
+    expect(result.current.readyToPublish).toBe(false);
+    expect(result.current.hydrationFailed).toBe(true);
+    expect(result.current.hydratingDeliveries).toBe(false);
+
+    await act(async () => {
+      await result.current.handlePublish();
+    });
+    expect(postCaseMutateAsyncMock).not.toHaveBeenCalled();
+
+    result.current.retryHydration();
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("is always ready when the request isn't approved — nothing to gate", () => {
+    const { result } = renderHook(
+      () => usePublishAnnouncementRequest({ ...APPROVED_REQUEST, state: "draft" }),
+      { wrapper },
+    );
+    expect(result.current.readyToPublish).toBe(true);
   });
 });

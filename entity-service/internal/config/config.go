@@ -19,11 +19,15 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wso2-open-operations/cs-tools/entity-service/internal/validate"
 )
 
 // DataSource identifies which backend the service reads from.
@@ -34,7 +38,7 @@ const (
 	DataSourcePostgres DataSource = "postgres"
 	// DataSourceServiceNow uses the Choreo ServiceNow API.
 	DataSourceServiceNow DataSource = "servicenow"
-	// DataSourcePostgresPrimarySNFallback serves every read and write from
+	// DataSourcePostgresServiceNowDualWrite serves every read and write from
 	// PostgreSQL (authoritative, same as DataSourcePostgres) and additionally
 	// best-effort mirrors writes to ServiceNow afterward, so that ServiceNow
 	// stays a genuine rollback target rather than going silently stale ahead
@@ -43,7 +47,7 @@ const (
 	// authoritative, and a failed mirror write is recorded (see
 	// SNWritebackFailureRepository) rather than retried or surfaced to the
 	// caller. Piloted on the account entity only — see routes.go.
-	DataSourcePostgresPrimarySNFallback DataSource = "postgres-primary-sn-fallback"
+	DataSourcePostgresServiceNowDualWrite DataSource = "postgres-servicenow-dual-write"
 )
 
 // Config holds all environment-driven settings for the service.
@@ -92,6 +96,45 @@ type Config struct {
 	// constructs EventPublisherService when both this is true AND
 	// EventHubBroker is set.
 	EventPublishingEnabled bool
+	// CSMMigrationSalesforceMembershipIngestEnabled turns on the
+	// Project_Contact__c / Contact branch of POST /salesforce/events (the
+	// customer onboarding database write), from
+	// CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED=true. Defaults to
+	// false: those envelopes are then acknowledged and ignored, as before
+	// the branch existed. The Account branch is unaffected by this flag.
+	CSMMigrationSalesforceMembershipIngestEnabled bool
+	// CSMMigrationSalesforceAccountIngestEnabled turns on the Account branch
+	// of POST /salesforce/events, from
+	// CSM_MIGRATION_SALESFORCE_ACCOUNT_INGEST_ENABLED=true. Defaults to false:
+	// Account envelopes are then acknowledged and ignored, because the
+	// ServiceNow sync still owns the account table and both writing it would
+	// fight over the same rows.
+	CSMMigrationSalesforceAccountIngestEnabled bool
+	// CSMMigrationSalesforceOpportunityIngestEnabled turns on the Opportunity
+	// branch of POST /salesforce/events (sf_opportunity plus its
+	// sf_opportunity_product line items), from
+	// CSM_MIGRATION_SALESFORCE_OPPORTUNITY_INGEST_ENABLED=true. Defaults to
+	// false: Opportunity envelopes are then acknowledged and ignored, because
+	// csm-sync-service still copies these tables from ServiceNow and the two
+	// writers would create duplicate rows (different row ids, non-unique sf_id).
+	CSMMigrationSalesforceOpportunityIngestEnabled bool
+	// CSMMigrationMembershipRegistrationEnabled turns on POST /users/me/memberships/register,
+	// which marks the signed-in user's still-INVITED memberships as
+	// REGISTERED in Salesforce (see membership_registration_service.go). Defaults to
+	// false, and while it is false routes.go does not register the route at
+	// all — it 404s, and nothing on this path can write to Salesforce.
+	CSMMigrationMembershipRegistrationEnabled bool
+	// CSMMigrationPortalWritesEnabled turns on the portal-driven membership
+	// write endpoints (POST/PATCH/DELETE /projects/{id}/contacts[/{email}]
+	// and the resend-invitation call). Both portals invite, re-role and
+	// deactivate customer users through them, and each one writes Postgres
+	// and Salesforce together.
+	//
+	// OFF BY DEFAULT (the value must be exactly "true"), and with it off the
+	// routes are not registered at all rather than answering 403: until the
+	// Sales Entity create endpoints this depends on are deployed, a portal
+	// that called them would write the database and leave Salesforce behind.
+	CSMMigrationPortalWritesEnabled bool
 	// GithubIntegrationEnabled gates the GitHub change-request sync: the
 	// webhook endpoint and the client that answers it.
 	//
@@ -118,15 +161,11 @@ type Config struct {
 	// CSMPortalBaseURL builds the link back to a change request in comments
 	// posted to GitHub. Empty omits the link rather than rendering a broken one.
 	CSMPortalBaseURL string
-	// GitHub label vocabulary overrides. Empty keeps ServiceNow's value.
-	GithubLabelChangeRequest     string
-	GithubLabelTypePrefix        string
-	GithubLabelScopePrefix       string
-	GithubLabelsScope            string
-	GithubLabelsImpact           string
-	GithubLabelsLikelihood       string
-	GithubLabelsState            string
-	GithubLabelsStrippedOnCreate string
+	// GitHub label vocabulary overrides. Empty keeps .github/labels.yml's value.
+	GithubLabelTypeIncident       string
+	GithubLabelTypeServiceRequest string
+	GithubLabelsClass             string
+	GithubLabelStatusAssigned     string
 
 	// CRNoticesEnabled turns on the change-request notice drainer: the poller
 	// that reads event_outbox and asks csm-notification-service to send the
@@ -145,24 +184,21 @@ type Config struct {
 	// A distinct topic is what actually isolates the two volumes; a distinct
 	// consumer group alone would only isolate the processing.
 	CREventHubTopic string
+
+	// ProjectEventHubTopic carries the onboarding events
+	// (project_contact.invited) rather than the shared EventHubTopic, so a
+	// backlog of case events can never delay an invitation and the
+	// onboarding dead-letter queue can be watched on its own.
+	// csm-notification-service consumes it with its own consumer group.
+	ProjectEventHubTopic string
 	// CRNoticePollInterval is how often to poll event_outbox when the last
 	// pass came back short. A backlog drains at full speed regardless, so this
 	// governs only the idle case: notice latency against query volume.
 	CRNoticePollInterval time.Duration
-	// SupportEngineerRole is the ServiceNow role name (e.g. an org-specific
-	// "sn_*" role) whose presence on a case comment's resolved author marks
-	// that comment as a qualifying support-engineer response — see
-	// sn_case_service.go's applyResponseSLAOnComment. Deliberately no
-	// committed default: this is organisation-specific vocabulary, the same
-	// reasoning apps/csm-portal/backend's own CSM_TEAM_REGISTRY uses for not
-	// shipping one. Left unset, that function simply can't confirm
-	// engineer-authorship and skips (logged) — not fatal, not required by
-	// Validate.
-	SupportEngineerRole string
-	// CustomerRoles is a comma-separated list of ServiceNow role names (see
-	// SUPPORT_ENGINEER_ROLE's own doc comment for the same
-	// organisation-specific-vocabulary reasoning — deliberately no
-	// committed default here either) whose presence on a case comment's
+	// CustomerRoles is a comma-separated list of ServiceNow role names
+	// (organisation-specific vocabulary, the same reasoning
+	// apps/csm-portal/backend's own CSM_TEAM_REGISTRY uses for not shipping
+	// a committed default) whose presence on a case comment's
 	// resolved author marks that comment as a customer reply — see
 	// sn_case_service.go's applyCustomerReplyStateTransition, which moves
 	// the case back to Work In Progress when a customer replies while it's
@@ -174,6 +210,41 @@ type Config struct {
 	// nothing to do with case state) — the two are read by separate
 	// processes/environments and don't interact.
 	CustomerRoles []string
+	// CSEngineerRole is the role name (e.g. an org-specific "sn_*" role)
+	// whose presence on a case comment's resolved author marks that comment
+	// as a qualifying CS-engineer/support-engineer response — see
+	// sn_case_service.go's applyResponseSLAOnComment and
+	// case_service.go's completeResponseSLAOnComment, both of which the
+	// CSM-native SLA engine (internal/service/sla_engine_service.go) uses
+	// to complete a case's "response" SLA clock. Deliberately no committed
+	// default: this is organisation-specific vocabulary, same reasoning
+	// CustomerRoles' own doc comment gives. Left unset, those functions
+	// simply can't confirm engineer-authorship and skip (logged) — not
+	// fatal, not required by Validate. Shared by both `snCaseService` (checked
+	// via `SNUserService`'s own role lookup) and `caseService` (checked
+	// against `repository.UserRepository.GetUserRoles`' own user_role
+	// vocabulary) — the same role name is meaningful in both, since
+	// "CS engineer" and "support engineer" are the same real-world role,
+	// not two different configs.
+	CSEngineerRole string
+	// SLARecomputeInterval is how often SLAEngineRecomputeWorker
+	// recomputes every CSM-native "sla" row's elapsed percentage/breach
+	// status (internal/service/sla_engine_recompute_worker.go). Same
+	// envDuration convention as CRNoticePollInterval/GithubOutboundInterval
+	// above.
+	SLARecomputeInterval time.Duration
+	// SalesforceIngestRetryInterval is how often SalesforceIngestRetryWorker
+	// re-runs Salesforce ingests that FAILED because the record's parent
+	// (project, account) was not in CSM yet
+	// (internal/service/salesforce_ingest_retry_worker.go), and also how
+	// old a failure must be before it is re-run. From
+	// SALESFORCE_INGEST_RETRY_INTERVAL; defaults to 5m, the ServiceNow
+	// sync's own cadence. Unlike the other intervals, an explicit "0"
+	// disables the job (envDurationOrOff), because it makes outbound Sales
+	// Entity calls on its own initiative and an operator must be able to
+	// stop that without turning the ingest off. An invalid or negative value
+	// disables it too (with a warning) rather than falling back to 5m.
+	SalesforceIngestRetryInterval time.Duration
 	// Auth* configure token validation (internal/auth), always on -- there is
 	// no config flag to disable it. AuthIssuer/AuthJWKSURL/
 	// AuthUserTokenAudiences are required (Validate rejects startup without
@@ -186,6 +257,44 @@ type Config struct {
 	// token in Authorization: Bearer. AuthUserTokenAudiences are the client ids
 	// (Asgardeo SPA/application ids) an ID token's aud must contain to be
 	// accepted as a user token.
+	// CloudStatusServiceIDs are the business services whose outages are
+	// published to the public cloud status dashboard, as a comma-separated
+	// list of UUIDs (CLOUD_STATUS_SERVICE_IDS).
+	//
+	// These are `service` rows, NOT service offerings. The ServiceNow flow
+	// this ports dot-walked an outage's configuration item AS a service
+	// offering and compared that offering's PARENT against a list of 14 ids.
+	// Setting offering ids here instead would match nothing and the sweep
+	// would silently never fire.
+	//
+	// Empty means the sweep is a no-op, which it logs. That is the safe
+	// default: an unconfigured deployment posts nothing to a public status
+	// page rather than guessing a scope.
+	CloudStatusServiceIDs []string
+
+	// CloudStatusDrainerEnabled turns on the background drainer that records
+	// outage transitions AND rewrites cloud_monitor.status
+	// (CLOUD_STATUS_DRAINER_ENABLED, default false).
+	//
+	// *** OFF BY DEFAULT BECAUSE OF THE STATUS WRITE. *** While
+	// csm-sync-service's one-time bulk migration is still running, both it and
+	// this drainer can write cloud_monitor.status. Clearing
+	// CLOUD_STATUS_SERVICE_IDS would stop the drainer but also disable the
+	// sweep endpoint and the dashboard reads, so the write needs a switch of
+	// its own.
+	CloudStatusDrainerEnabled bool
+
+	// CloudStatusPollInterval is how often CloudStatusDrainer claims
+	// event_outbox rows for `outage` and `outage_affected_ci`
+	// (CLOUD_STATUS_POLL_INTERVAL). Same envDuration convention as
+	// CRNoticePollInterval.
+	//
+	// This is the FAST path. The reconciliation sweep in
+	// csm-scheduled-tasks reaches the same conclusions on its own schedule
+	// and is what makes a missed drain harmless, so this interval governs
+	// promptness, not correctness.
+	CloudStatusPollInterval time.Duration
+
 	AuthIssuer             string
 	AuthJWKSURL            string
 	AuthUserTokenAudiences []string
@@ -218,6 +327,48 @@ type Config struct {
 	SalesEntityClientID     string
 	SalesEntityClientSecret string
 	SalesEntityScopes       string
+	// M2MTrustedActorEmails is the allowlist of service-account emails an
+	// M2M caller (no x-user-id-token, e.g. UMT via csm-integration-service)
+	// may claim as the acting user via AddCaseTagRequest.ActorEmail. An
+	// unset/empty var means no email is trusted and every such request is
+	// rejected -- this is deliberately not a default-open list, since it
+	// exists specifically to stop an M2M caller from spoofing an arbitrary
+	// actor. Compared case-insensitively in the handler.
+	M2MTrustedActorEmails []string
+
+	// Escalation* configure the fixed, deployment-specific notification
+	// recipient GROUPS EscalationService.CreateEscalation (Postgres data
+	// source) layers on top of the per-case-derived ones (account technical
+	// owner, CRE team lead, product routing, CSM) -- see that method's own
+	// doc comment for the full EL1..EL5 cumulative rule these feed. Each one
+	// is a "group".id (migration 0074), resolved to its real member list
+	// via team_member.group_id, NOT a single fixed address -- every
+	// configured tier notifies however many people are actually in that
+	// group. Every one of these is OPTIONAL: an unset/empty value means "no
+	// recipients from this slot," never a startup failure or a request
+	// error -- not every deployment configures every tier on day one, same
+	// reasoning CustomerRoles/CSEngineerRole's own doc comments give for
+	// org-specific vocabulary that doesn't belong hardcoded in this repo.
+	// None of these are required by Validate for that reason, though a SET
+	// value is still checked there for being a well-formed UUID (a
+	// misconfigured group id would otherwise silently resolve zero
+	// recipients instead of surfacing the typo at startup).
+	EscalationEL1AmericasTLGroupID string
+	EscalationEL2AmericasTUGroupID string
+	// EscalationEL2ServiceProductGroupID/EscalationEL2IdentityServerGroupID/
+	// EscalationEL2DefaultProductGroupID are the three product-routed EL2
+	// buckets: the case's deployed product's category/business_unit picks
+	// exactly one (SERVICE -> service; SOFTWARE with business_unit IAM ->
+	// identity server; everything else, including no business_unit -> the
+	// software default). A case with no deployed product/product info at
+	// all gets none of the three, silently.
+	EscalationEL2ServiceProductGroupID string
+	EscalationEL2IdentityServerGroupID string
+	EscalationEL2DefaultProductGroupID string
+	EscalationEL3CREHeadGroupID        string
+	EscalationEL4CCOGroupID            string
+	EscalationEL4CROGroupID            string
+	EscalationEL5CEOGroupID            string
 }
 
 // Load reads configuration from environment variables and returns a populated
@@ -250,31 +401,49 @@ func Load() *Config {
 		GithubIntegrationLogin:                   os.Getenv("GITHUB_INTEGRATION_LOGIN"),
 		GithubOutboundInterval:                   envDuration("GITHUB_OUTBOUND_INTERVAL", 15*time.Second),
 		CSMPortalBaseURL:                         os.Getenv("CSM_PORTAL_BASE_URL"),
-		GithubLabelChangeRequest:                 os.Getenv("GITHUB_LABEL_CHANGE_REQUEST"),
-		GithubLabelTypePrefix:                    os.Getenv("GITHUB_LABEL_TYPE_PREFIX"),
-		GithubLabelScopePrefix:                   os.Getenv("GITHUB_LABEL_SCOPE_PREFIX"),
-		GithubLabelsScope:                        os.Getenv("GITHUB_LABELS_SCOPE"),
-		GithubLabelsImpact:                       os.Getenv("GITHUB_LABELS_IMPACT"),
-		GithubLabelsLikelihood:                   os.Getenv("GITHUB_LABELS_LIKELIHOOD"),
-		GithubLabelsState:                        os.Getenv("GITHUB_LABELS_STATE"),
-		GithubLabelsStrippedOnCreate:             os.Getenv("GITHUB_LABELS_STRIPPED_ON_CREATE"),
+		GithubLabelTypeIncident:                  os.Getenv("GITHUB_LABEL_TYPE_INCIDENT"),
+		GithubLabelTypeServiceRequest:            os.Getenv("GITHUB_LABEL_TYPE_SERVICE_REQUEST"),
+		GithubLabelsClass:                        os.Getenv("GITHUB_LABELS_CLASS"),
+		GithubLabelStatusAssigned:                os.Getenv("GITHUB_LABEL_STATUS_ASSIGNED"),
 		CRNoticesEnabled:                         os.Getenv("CR_NOTICES_ENABLED") == "true",
-		CREventHubTopic:                          getEnvOrDefault("CR_EVENT_HUB_TOPIC", "cr-events"),
-		CRNoticePollInterval:                     envDuration("CR_NOTICE_POLL_INTERVAL", 5*time.Second),
-		AuthIssuer:                               os.Getenv("AUTH_ISSUER"),
-		AuthJWKSURL:                              os.Getenv("AUTH_JWKS_URL"),
-		AuthUserTokenAudiences:                   splitComma(os.Getenv("AUTH_USER_TOKEN_AUDIENCES")),
-		AuthClockSkew:                            envDuration("AUTH_CLOCK_SKEW", 30*time.Second),
-		AuthInternalClientIDsRaw:                 os.Getenv("AUTH_INTERNAL_CLIENT_IDS"),
-		SupportEngineerRole:                      os.Getenv("SUPPORT_ENGINEER_ROLE"),
-		CustomerRoles:                            splitComma(os.Getenv("CUSTOMER_ROLES")),
-		SalesEntityBaseURL:                       os.Getenv("SALES_ENTITY_BASE_URL"),
-		SalesEntityTokenURL:                      os.Getenv("SALES_ENTITY_TOKEN_URL"),
-		SalesEntityClientID:                      os.Getenv("SALES_ENTITY_CLIENT_ID"),
-		SalesEntityClientSecret:                  os.Getenv("SALES_ENTITY_CLIENT_SECRET"),
-		SalesEntityScopes:                        os.Getenv("SALES_ENTITY_SCOPES"),
+		CSMMigrationSalesforceMembershipIngestEnabled: os.Getenv("CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED") == "true",
+		CSMMigrationSalesforceAccountIngestEnabled:    os.Getenv("CSM_MIGRATION_SALESFORCE_ACCOUNT_INGEST_ENABLED") == "true",
+		CSMMigrationPortalWritesEnabled:               os.Getenv("CSM_MIGRATION_PORTAL_WRITES_ENABLED") == "true",
+		CREventHubTopic:                               getEnvOrDefault("CR_EVENT_HUB_TOPIC", "cr-events"),
+		ProjectEventHubTopic:                          getEnvOrDefault("PROJECT_EVENT_HUB_TOPIC", "project-events"),
+		CRNoticePollInterval:                          envDuration("CR_NOTICE_POLL_INTERVAL", 5*time.Second),
+		AuthIssuer:                                    os.Getenv("AUTH_ISSUER"),
+		AuthJWKSURL:                                   os.Getenv("AUTH_JWKS_URL"),
+		AuthUserTokenAudiences:                        splitComma(os.Getenv("AUTH_USER_TOKEN_AUDIENCES")),
+		AuthClockSkew:                                 envDuration("AUTH_CLOCK_SKEW", 30*time.Second),
+		AuthInternalClientIDsRaw:                      os.Getenv("AUTH_INTERNAL_CLIENT_IDS"),
+		CustomerRoles:                                 splitComma(os.Getenv("CUSTOMER_ROLES")),
+		CSEngineerRole:                                os.Getenv("CS_ENGINEER_ROLE"),
+		SLARecomputeInterval:                          envDuration("SLA_RECOMPUTE_INTERVAL", 45*time.Second),
+		CloudStatusServiceIDs:                         splitComma(os.Getenv("CLOUD_STATUS_SERVICE_IDS")),
+		CloudStatusDrainerEnabled:                     os.Getenv("CLOUD_STATUS_DRAINER_ENABLED") == "true",
+		CloudStatusPollInterval:                       envDuration("CLOUD_STATUS_POLL_INTERVAL", 10*time.Second),
+		SalesforceIngestRetryInterval:                 envDurationOrOff("SALESFORCE_INGEST_RETRY_INTERVAL", 5*time.Minute),
+		SalesEntityBaseURL:                            os.Getenv("SALES_ENTITY_BASE_URL"),
+		SalesEntityTokenURL:                           os.Getenv("SALES_ENTITY_TOKEN_URL"),
+		SalesEntityClientID:                           os.Getenv("SALES_ENTITY_CLIENT_ID"),
+		SalesEntityClientSecret:                       os.Getenv("SALES_ENTITY_CLIENT_SECRET"),
+		SalesEntityScopes:                             os.Getenv("SALES_ENTITY_SCOPES"),
+		CSMMigrationMembershipRegistrationEnabled:     os.Getenv("CSM_MIGRATION_MEMBERSHIP_REGISTRATION_ENABLED") == "true",
+		M2MTrustedActorEmails:                         splitComma(os.Getenv("M2M_TRUSTED_ACTOR_EMAILS")),
+		EscalationEL1AmericasTLGroupID:                os.Getenv("ESCALATION_EL1_AMERICAS_TL_GROUP_ID"),
+		EscalationEL2AmericasTUGroupID:                os.Getenv("ESCALATION_EL2_AMERICAS_TU_GROUP_ID"),
+		EscalationEL2ServiceProductGroupID:            os.Getenv("ESCALATION_EL2_SERVICE_PRODUCT_GROUP_ID"),
+		EscalationEL2IdentityServerGroupID:            os.Getenv("ESCALATION_EL2_IDENTITY_SERVER_GROUP_ID"),
+		EscalationEL2DefaultProductGroupID:            os.Getenv("ESCALATION_EL2_DEFAULT_PRODUCT_GROUP_ID"),
+		EscalationEL3CREHeadGroupID:                   os.Getenv("ESCALATION_EL3_CRE_HEAD_GROUP_ID"),
+		EscalationEL4CCOGroupID:                       os.Getenv("ESCALATION_EL4_CCO_GROUP_ID"),
+		EscalationEL4CROGroupID:                       os.Getenv("ESCALATION_EL4_CRO_GROUP_ID"),
+		EscalationEL5CEOGroupID:                       os.Getenv("ESCALATION_EL5_CEO_GROUP_ID"),
 	}
 	cfg.AuthInternalClientIDs = ParseInternalClientIDs(cfg.AuthInternalClientIDsRaw)
+	// Set outside the literal so its longer key does not realign every field above.
+	cfg.CSMMigrationSalesforceOpportunityIngestEnabled = os.Getenv("CSM_MIGRATION_SALESFORCE_OPPORTUNITY_INGEST_ENABLED") == "true"
 	return cfg
 }
 
@@ -295,6 +464,27 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// getBoolOrDefault parses a boolean env var, falling back to defaultVal when it
+// is unset or unparseable.
+//
+// The other boolean flags here compare against "true" directly, which is safe
+// for a flag that defaults to off: a typo leaves it off, as it already was.
+// This one exists for flags that default to ON — there, "TRUE" or "1" silently
+// turning the flag off is a real failure, so accept everything ParseBool does.
+func getBoolOrDefault(key string, defaultVal bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		slog.Warn("ignoring unparseable boolean configuration value",
+			"key", key, "value", v, "using", defaultVal)
+		return defaultVal
+	}
+	return parsed
 }
 
 // splitComma parses a comma-separated env var into a trimmed, non-empty
@@ -365,13 +555,13 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.DataSource {
-	case DataSourcePostgres, DataSourceServiceNow, DataSourcePostgresPrimarySNFallback:
+	case DataSourcePostgres, DataSourceServiceNow, DataSourcePostgresServiceNowDualWrite:
 		// valid
 	default:
-		return fmt.Errorf("invalid DATA_SOURCE %q: must be %q, %q, or %q", c.DataSource, DataSourcePostgres, DataSourceServiceNow, DataSourcePostgresPrimarySNFallback)
+		return fmt.Errorf("invalid DATA_SOURCE %q: must be %q, %q, or %q", c.DataSource, DataSourcePostgres, DataSourceServiceNow, DataSourcePostgresServiceNowDualWrite)
 	}
 	// Postgres credentials are required for DATA_SOURCE=postgres and
-	// DATA_SOURCE=postgres-primary-sn-fallback — both serve every entity read
+	// DATA_SOURCE=postgres-servicenow-dual-write — both serve every entity read
 	// and write from the pool (the fallback mode's ServiceNow leg is a
 	// best-effort mirror on top, never a read source). servicenow mode skips
 	// the pool (db.NewPoolIfNeeded) so a local customer-portal can start
@@ -388,7 +578,7 @@ func (c *Config) Validate() error {
 	// with "DB_USER is required", which is what this branch exists to prevent.
 	dbSet := c.DBUser != "" || c.DBPassword != "" || c.DBName != ""
 	dbComplete := c.DBUser != "" && c.DBPassword != "" && c.DBName != ""
-	dbRequired := c.DataSource == DataSourcePostgres || c.DataSource == DataSourcePostgresPrimarySNFallback
+	dbRequired := c.DataSource == DataSourcePostgres || c.DataSource == DataSourcePostgresServiceNowDualWrite
 
 	if dbRequired && !dbComplete {
 		if c.DBUser == "" {
@@ -409,9 +599,9 @@ func (c *Config) Validate() error {
 	}
 	// ServiceNow integration service credentials are required for
 	// DATA_SOURCE=servicenow (reads go there) and also for
-	// DATA_SOURCE=postgres-primary-sn-fallback (the best-effort mirror write
+	// DATA_SOURCE=postgres-servicenow-dual-write (the best-effort mirror write
 	// goes there, via the same client — see SNWritebackDispatcher).
-	snRequired := c.DataSource == DataSourceServiceNow || c.DataSource == DataSourcePostgresPrimarySNFallback
+	snRequired := c.DataSource == DataSourceServiceNow || c.DataSource == DataSourcePostgresServiceNowDualWrite
 	if snRequired {
 		if c.ServiceNowIntegrationServiceBaseURL == "" {
 			return fmt.Errorf("SERVICENOW_INTEGRATION_SERVICE_BASE_URL is required when DATA_SOURCE=%s", c.DataSource)
@@ -453,7 +643,55 @@ func (c *Config) Validate() error {
 	if salesEntitySet && !c.SalesEntityConfigured() {
 		return fmt.Errorf("SALES_ENTITY_BASE_URL, SALES_ENTITY_TOKEN_URL, SALES_ENTITY_CLIENT_ID, and SALES_ENTITY_CLIENT_SECRET must be set together or not at all")
 	}
+	// Each Escalation*GroupID is optional (unset = no recipients from that
+	// slot, see the field's own doc comment) but, if SET, must be a
+	// well-formed "group".id -- otherwise a typo'd env var would silently
+	// resolve to zero recipients at request time instead of failing loudly
+	// at startup where it's actually actionable.
+	escalationGroupIDs := map[string]string{
+		"ESCALATION_EL1_AMERICAS_TL_GROUP_ID":     c.EscalationEL1AmericasTLGroupID,
+		"ESCALATION_EL2_AMERICAS_TU_GROUP_ID":     c.EscalationEL2AmericasTUGroupID,
+		"ESCALATION_EL2_SERVICE_PRODUCT_GROUP_ID": c.EscalationEL2ServiceProductGroupID,
+		"ESCALATION_EL2_IDENTITY_SERVER_GROUP_ID": c.EscalationEL2IdentityServerGroupID,
+		"ESCALATION_EL2_DEFAULT_PRODUCT_GROUP_ID": c.EscalationEL2DefaultProductGroupID,
+		"ESCALATION_EL3_CRE_HEAD_GROUP_ID":        c.EscalationEL3CREHeadGroupID,
+		"ESCALATION_EL4_CCO_GROUP_ID":             c.EscalationEL4CCOGroupID,
+		"ESCALATION_EL4_CRO_GROUP_ID":             c.EscalationEL4CROGroupID,
+		"ESCALATION_EL5_CEO_GROUP_ID":             c.EscalationEL5CEOGroupID,
+	}
+	for envVar, value := range escalationGroupIDs {
+		if value != "" && !validate.IsUUID(value) {
+			return fmt.Errorf("%s %q is not a valid UUID", envVar, value)
+		}
+	}
 	return nil
+}
+
+// PostgresAuthoritative reports whether PostgreSQL is the system of record:
+// DATA_SOURCE=postgres, or postgres-servicenow-dual-write, which serves every
+// read and write from PostgreSQL too and only mirrors some writes to
+// ServiceNow afterwards.
+//
+// The customer onboarding features (the Salesforce membership ingest, the
+// portal membership writes, first-access registration) need exactly this and
+// nothing more. Memberships never go through the ServiceNow mirror: ServiceNow
+// gets them from Salesforce, through its own Service Bus subscription, so it
+// stays current in either mode.
+func (c *Config) PostgresAuthoritative() bool {
+	return c.DataSource == DataSourcePostgres || c.DataSource == DataSourcePostgresServiceNowDualWrite
+}
+
+// HasPortalMembershipWrites reports whether the portal-driven membership
+// write endpoints may be registered: the flag is on, PostgreSQL is
+// authoritative (the write is a Postgres transaction — there is no ServiceNow
+// equivalent), and the REST sales/sales-entity-service connection is
+// complete, since half of every one of those writes goes to Salesforce.
+// routes.go ANDs this with db != nil, the same way every other
+// Postgres-only feature set is gated.
+func (c *Config) HasPortalMembershipWrites() bool {
+	return c.CSMMigrationPortalWritesEnabled &&
+		c.PostgresAuthoritative() &&
+		c.SalesEntityConfigured()
 }
 
 // SalesEntityConfigured reports whether every REST sales/sales-entity-service env var is set.
@@ -500,6 +738,26 @@ func envDuration(key string, def time.Duration) time.Duration {
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= 0 {
 		return def
+	}
+	return d
+}
+
+// envDurationOrOff is envDuration for an interval that can be switched off:
+// unset returns def, and an explicit zero ("0", "0s", "0m") returns 0, which
+// the caller reads as "disabled". An unparseable or negative value also
+// returns 0, with a warning: it fails closed, because an operator who wrote
+// "off" or "-1" meant to stop the job, and falling back to def would start a
+// worker that makes outbound calls they tried to turn off.
+func envDurationOrOff(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		slog.Warn("invalid duration configuration value, treating it as disabled",
+			"key", key, "value", v)
+		return 0
 	}
 	return d
 }

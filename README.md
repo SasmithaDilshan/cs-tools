@@ -15,9 +15,9 @@ cs-tools/
 │   └── customer-portal/     # Customer Portal (Ballerina backend + React webapp + React microapp)
 ├── entity-service/          # Shared entity service
 └── integrations/
-    ├── acp-closure-service/     # Go CLI: Account Closure Process, Phase 1 (subscription end-date closure)
-    ├── csm-integration-service/ # Go M2M service for third-party account/project search
-    └── customer-service/        # Customer operations related integration Ballerina service
+    ├── acp-closure-service/         # Go CLI: Account Closure Process, Phase 1 (subscription end-date closure)
+    ├── csm-integration-service/     # Go M2M service for third-party account/project search
+    └── customer-service/            # Customer operations related integration Ballerina service
 ```
 
 ## Components
@@ -34,6 +34,8 @@ An internal portal for Customer Success Managers to manage and track customer ca
 See the [CSM Portal README](./apps/csm-portal/README.md) for full setup and usage documentation.
 
 ### Customer Portal (`apps/customer-portal/`)
+
+> **⚠️ Deprecation Notice:** The Ballerina backend (v1) for the Customer Portal is deprecated. It will be replaced by a Go based v2 backend. New feature development should target the Go backend instead.
 
 An open-source solution for customer success operations built with a modular architecture. It enables teams to manage customer-facing workflows, project visibility, and support experiences through a unified platform.
 

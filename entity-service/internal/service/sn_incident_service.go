@@ -98,8 +98,20 @@ type snIncidentFilters struct {
 	// match against ServiceNow's `number` column -- not part of the
 	// free-text SearchQuery scan.
 	Number string `json:"number,omitempty"`
+	// CorrelationID: see domain.SearchIncidentsFilters.CorrelationID doc
+	// comment. Exact match against ServiceNow's `correlation_id` column --
+	// not part of the free-text SearchQuery scan.
+	CorrelationID string `json:"correlationId,omitempty"`
 	// StateKeys: see domain.SearchIncidentsFilters.StateKeys doc comment.
 	StateKeys []int `json:"stateKeys,omitempty"`
+	// IncidentStateKeys: see domain.SearchIncidentsFilters Filters
+	// "incidentStateKeys" doc comment. nil/empty (omitted) means the filter
+	// was not supplied. Deliberately kept separate from StateKeys above --
+	// this filters ServiceNow's raw `incident_state` field, a distinct field
+	// that exists independently of the OOB `state` field on the same
+	// incident row; carried through only for exact parity with SN's native
+	// incident dashboards.
+	IncidentStateKeys []int `json:"incidentStateKeys,omitempty"`
 	// AssignmentGroupIDs: sys_user_group sys_ids (converted from UUIDs).
 	AssignmentGroupIDs []string `json:"assignmentGroupIds,omitempty"`
 	// BusinessServiceIDs: business_service sys_ids (converted from UUIDs).
@@ -234,6 +246,9 @@ func (s *snIncidentService) SearchIncidents(ctx context.Context, req domain.Sear
 	if err := validateExactNumber("number", req.Filters.Number); err != nil {
 		return domain.SearchIncidentsResponse{}, err
 	}
+	if err := validateExactNumber("correlationId", req.Filters.CorrelationID); err != nil {
+		return domain.SearchIncidentsResponse{}, err
+	}
 	if req.SortBy.Field != "" && !validIncidentSortField[req.SortBy.Field] {
 		return domain.SearchIncidentsResponse{}, &apierror.ValidationError{Msg: "sortBy.field contains invalid value: " + string(req.SortBy.Field)}
 	}
@@ -279,7 +294,9 @@ func (s *snIncidentService) SearchIncidents(ctx context.Context, req domain.Sear
 			PriorityKeys:       priorityKeys,
 			ParentIDs:          uuidsToSysids(req.Filters.ParentIDs),
 			Number:             stringPtrValue(req.Filters.Number),
+			CorrelationID:      stringPtrValue(req.Filters.CorrelationID),
 			StateKeys:          parsedFilters.StateKeys,
+			IncidentStateKeys:  snIncidentStateKeysFromStrings(parsedFilters.IncidentStateKeys),
 			AssignmentGroupIDs: uuidsToSysids(parsedFilters.AssignmentGroupIDs),
 			BusinessServiceIDs: uuidsToSysids(parsedFilters.BusinessServiceIDs),
 			StartCreatedDate:   formatSNDateTimeUTC(parsedFilters.StartCreatedDate),
@@ -426,6 +443,7 @@ func (s *snIncidentService) AggregateIncidents(ctx context.Context, req domain.A
 			ParentIDs:          uuidsToSysids(req.Filters.ParentIDs),
 			Number:             stringPtrValue(req.Filters.Number),
 			StateKeys:          parsedFilters.StateKeys,
+			IncidentStateKeys:  snIncidentStateKeysFromStrings(parsedFilters.IncidentStateKeys),
 			AssignmentGroupIDs: uuidsToSysids(parsedFilters.AssignmentGroupIDs),
 			BusinessServiceIDs: uuidsToSysids(parsedFilters.BusinessServiceIDs),
 			StartCreatedDate:   formatSNDateTimeUTC(parsedFilters.StartCreatedDate),
@@ -659,6 +677,18 @@ type snCreateIncidentPayload struct {
 	ChangeRequestID     *string  `json:"changeRequestId,omitempty"`
 	ProblemID           *string  `json:"problemId,omitempty"`
 	CausedByID          *string  `json:"causedById,omitempty"`
+	// CorrelationID: see domain.CreateIncidentRequest.CorrelationID doc
+	// comment. Maps to ServiceNow's stock `correlation_id` field.
+	CorrelationID *string `json:"correlationId,omitempty"`
+	// Environment: see domain.CreateIncidentRequest.Environment doc comment.
+	// Maps to ServiceNow's own custom incident.u_enviroment field, but the
+	// Choreo connector's CREATE record spells the JSON key correctly as
+	// u_environment -- confirmed by a live Azure-Staging 400, "data binding
+	// failed: undefined field 'u_enviroment'", when the misspelled key
+	// (used on PATCH, see snUpdateIncidentPayload.Environment) was sent
+	// here instead. The two operations' generated records disagree on the
+	// key's spelling; this is CREATE-only.
+	Environment *string `json:"u_environment,omitempty"`
 }
 
 // snCreateIncidentResponse mirrors the Choreo POST /incidents response.
@@ -673,6 +703,16 @@ type snCreateIncidentResponse struct {
 }
 
 func (s *snIncidentService) CreateIncident(ctx context.Context, req domain.CreateIncidentRequest) (domain.CreateIncidentResponse, error) {
+	// Reject before the ServiceNow call, not after: createIncidentSNFirst
+	// creates the ServiceNow incident first and has no compensating delete,
+	// so a value too long for either ServiceNow's u_enviroment (max 40) or
+	// this service's own environment column (VARCHAR(40)) must fail fast
+	// here rather than leave an orphaned ServiceNow incident behind.
+	if req.Environment != nil && len([]rune(*req.Environment)) > 40 {
+		return domain.CreateIncidentResponse{}, &apierror.ValidationError{
+			Msg: "environment must not exceed 40 characters",
+		}
+	}
 	if req.Subject == "" {
 		return domain.CreateIncidentResponse{}, &apierror.ValidationError{Msg: "subject is required"}
 	}
@@ -754,6 +794,8 @@ func (s *snIncidentService) CreateIncident(ctx context.Context, req domain.Creat
 		WatchList:          watchList,
 		AdditionalComments: req.AdditionalComments,
 		WorkNotes:          req.WorkNotes,
+		CorrelationID:      req.CorrelationID,
+		Environment:        req.Environment,
 	}
 	if req.Subcategory != nil {
 		v := snIncidentSubcategoryKeyMap[*req.Subcategory]
@@ -845,7 +887,23 @@ func (s *snIncidentService) CreateIncident(ctx context.Context, req domain.Creat
 // Any failure is logged and does not fail CreateIncident itself: the
 // incident already exists in ServiceNow by this point.
 func (s *snIncidentService) publishIncidentCreated(ctx context.Context, req domain.CreateIncidentRequest, incidentID string) {
-	if s.publisher == nil {
+	publishIncidentCreatedEvent(ctx, s.publisher, req, incidentID)
+}
+
+// publishIncidentCreatedEvent is publishIncidentCreated's actual body,
+// factored out to a package-level function so
+// incidentService.createIncidentSNFirst (DATA_SOURCE=postgres-servicenow-dual-write)
+// can call it too, AFTER its own Postgres insert succeeds, rather than
+// relying on snIncidentService's own automatic publish -- which fires right
+// after the ServiceNow POST returns, before that Postgres insert has even
+// been attempted. A consumer could otherwise receive incident.created for an
+// incident the Postgres-backed read API (the only one live in this mode)
+// cannot yet, or ever, return -- CodeRabbit correctly flagged this on PR
+// #1922. publisher may be nil (e.g. the dual-write mirror instance is
+// constructed with publisher=nil specifically so its own CreateIncident
+// never double-publishes -- see routes.go's incident DataSource wiring).
+func publishIncidentCreatedEvent(ctx context.Context, publisher EventPublisherService, req domain.CreateIncidentRequest, incidentID string) {
+	if publisher == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, publishIncidentCreatedTimeout)
@@ -864,7 +922,7 @@ func (s *snIncidentService) publishIncidentCreated(ctx context.Context, req doma
 		slog.ErrorContext(ctx, "sn create incident: encode incident.created payload failed", "incidentId", incidentID, "error", err)
 		return
 	}
-	if err := s.publisher.Publish(ctx, events.TypeIncidentCreated, incidentID, payload); err != nil {
+	if err := publisher.Publish(ctx, events.TypeIncidentCreated, incidentID, payload); err != nil {
 		// Not logging err itself: it can carry a raw Event Hub client error
 		// (potentially including connection/broker details), and this
 		// service's own convention is to log only ids and sanitised
@@ -947,25 +1005,28 @@ var snIncidentUrgencyLabelMap = map[int]string{
 
 // snGetIncidentResponse mirrors the Choreo GET /incidents/{id} response.
 type snGetIncidentResponse struct {
-	ID                    *string                     `json:"id"`
-	Number                *string                     `json:"number"`
-	OpenedOn              *string                     `json:"openedOn"`
-	Subject               *string                     `json:"subject"`
-	Caller                *snIncidentEntityRef        `json:"caller"`
-	Priority              *snIncidentIntLabel         `json:"priority"`
-	State                 *snIncidentIntLabel         `json:"state"`
-	Category              *snIncidentStrLabel         `json:"category"`
-	Subcategory           *snIncidentStrLabel         `json:"subcategory"`
-	Parent                *snIncidentEntityRef        `json:"parent"`
-	ParentIncident        *snIncidentEntityRef        `json:"parentIncident"`
-	AssignmentGroup       *snIncidentEntityRef        `json:"assignmentGroup"`
-	AssignedTo            *snIncidentEntityRef        `json:"assignedTo"`
-	Service               *snIncidentEntityRef        `json:"service"`
-	ServiceOffering       *snIncidentEntityRef        `json:"serviceOffering"`
-	ConfigurationItem     *snIncidentEntityRef        `json:"configurationItem"`
-	ContactType           *snIncidentStrLabel         `json:"contactType"`
-	Impact                *snIncidentIntLabel         `json:"impact"`
-	Urgency               *snIncidentIntLabel         `json:"urgency"`
+	ID                *string              `json:"id"`
+	Number            *string              `json:"number"`
+	OpenedOn          *string              `json:"openedOn"`
+	Subject           *string              `json:"subject"`
+	Caller            *snIncidentEntityRef `json:"caller"`
+	Priority          *snIncidentIntLabel  `json:"priority"`
+	State             *snIncidentIntLabel  `json:"state"`
+	Category          *snIncidentStrLabel  `json:"category"`
+	Subcategory       *snIncidentStrLabel  `json:"subcategory"`
+	Parent            *snIncidentEntityRef `json:"parent"`
+	ParentIncident    *snIncidentEntityRef `json:"parentIncident"`
+	AssignmentGroup   *snIncidentEntityRef `json:"assignmentGroup"`
+	AssignedTo        *snIncidentEntityRef `json:"assignedTo"`
+	Service           *snIncidentEntityRef `json:"service"`
+	ServiceOffering   *snIncidentEntityRef `json:"serviceOffering"`
+	ConfigurationItem *snIncidentEntityRef `json:"configurationItem"`
+	ContactType       *snIncidentStrLabel  `json:"contactType"`
+	Impact            *snIncidentIntLabel  `json:"impact"`
+	Urgency           *snIncidentIntLabel  `json:"urgency"`
+	// Environment: see snCreateIncidentPayload.Environment doc comment. Maps
+	// to ServiceNow's own custom incident.u_enviroment field.
+	Environment           *string                     `json:"u_enviroment"`
 	ChangeRequest         *snIncidentEntityRef        `json:"changeRequest"`
 	Problem               *snIncidentEntityRef        `json:"problem"`
 	CausedBy              *snIncidentEntityRef        `json:"causedBy"`
@@ -1049,6 +1110,7 @@ func mapSNIncidentToView(sn snGetIncidentResponse) domain.IncidentView {
 		ResolvedBy:         sn.ResolvedBy,
 		ResolvedOn:         sn.ResolvedOn,
 		IncidentReport:     sn.IncidentReport,
+		Environment:        sn.Environment,
 	}
 	if sn.ResolutionCode != nil {
 		view.ResolutionCode = &sn.ResolutionCode.Label
@@ -1205,6 +1267,11 @@ type snUpdateIncidentPayload struct {
 	AdditionalComments  *string   `json:"additionalComments,omitempty"`
 	WorkNotes           *string   `json:"workNotes,omitempty"`
 	WatchList           *[]string `json:"watchList,omitempty"`
+	// Environment: see snCreateIncidentPayload.Environment doc comment.
+	// json.RawMessage (not *string) so an explicit clear can be forwarded to
+	// ServiceNow as a real `null`, not just omitted -- same pattern as
+	// sn_change_request_service.go's CustomerGroupID.
+	Environment json.RawMessage `json:"u_enviroment,omitempty"`
 }
 
 // snUpdateIncidentResponse mirrors the Choreo PATCH /incidents/{id} response.
@@ -1225,9 +1292,17 @@ func (s *snIncidentService) UpdateIncident(ctx context.Context, req domain.Updat
 		req.ServiceOfferingID != nil || req.ConfigurationItemID != nil || req.ChangeRequestID != nil ||
 		req.ProblemID != nil || req.CausedByID != nil || req.ResolvedByID != nil ||
 		req.ResolutionNotes != nil || req.IncidentReport != nil || req.AdditionalComments != nil ||
-		req.WorkNotes != nil || req.WatchList != nil
+		req.WorkNotes != nil || req.WatchList != nil || req.Environment != nil
 	if !hasUpdate {
 		return domain.UpdateIncidentResponse{}, &apierror.ValidationError{Msg: "at least one field must be provided"}
+	}
+
+	// Reject before the ServiceNow call, same as CreateIncident: a value too
+	// long for ServiceNow's u_enviroment (max 40) must fail fast here. Skipped
+	// for an explicit clear (*req.Environment == nil) -- there's no length to
+	// check when the new value is null.
+	if req.Environment != nil && *req.Environment != nil && len([]rune(**req.Environment)) > 40 {
+		return domain.UpdateIncidentResponse{}, &apierror.ValidationError{Msg: "environment must not exceed 40 characters"}
 	}
 
 	if req.Priority != nil && !validIncidentPriority[*req.Priority] {
@@ -1291,6 +1366,17 @@ func (s *snIncidentService) UpdateIncident(ctx context.Context, req domain.Updat
 		IncidentReport:     req.IncidentReport,
 		AdditionalComments: req.AdditionalComments,
 		WorkNotes:          req.WorkNotes,
+	}
+	if req.Environment != nil {
+		var v any
+		if *req.Environment != nil {
+			v = **req.Environment
+		}
+		raw, err := rawJSONOrNull(v)
+		if err != nil {
+			return domain.UpdateIncidentResponse{}, fmt.Errorf("sn update incident: marshal environment: %w", err)
+		}
+		payload.Environment = raw
 	}
 	if req.WatchList != nil {
 		// The backing service's incident-update payload declares the watch list as

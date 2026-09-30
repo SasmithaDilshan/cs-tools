@@ -16,7 +16,9 @@
 
 // Package salesentity is an HTTP client for the REST app sales/sales-entity-service
 // (not GraphQL sales/entity-graphql-service). POST /salesforce/events uses
-// POST /customer-search to fetch a Customer by Salesforce Account Id.
+// POST /customer-search to fetch a Customer by Salesforce Account Id. The write
+// side (PATCH /contacts/{id}, PATCH /project-contacts/{id}) backs the
+// registration flip -- see internal/service/membership_registration_service.go.
 package salesentity
 
 import (
@@ -36,7 +38,14 @@ import (
 )
 
 const (
-	customerSearchPath = "/customer-search"
+	customerSearchPath       = "/customer-search"
+	contactSearchPath        = "/contacts/search"
+	projectContactSearchPath = "/project-contacts/search"
+	// contactPath / projectContactPath are the single-record write resources;
+	// the record's Salesforce Id is appended: PATCH /contacts/{id} and
+	// PATCH /project-contacts/{id}.
+	contactPath        = "/contacts/"
+	projectContactPath = "/project-contacts/"
 	defaultTimeout     = 15 * time.Second
 	tokenExpirySlack   = 30 * time.Second
 )
@@ -66,12 +75,137 @@ type Customer struct {
 	Status                *string `json:"status"`
 	AccountClassification *string `json:"accountClassification"`
 	TechnicalOwner        *string `json:"technicalOwner"`
+	// DomainList is the account's comma-separated list of email domains its
+	// contacts may use (Salesforce Account.Domain_List__c). It exists only in
+	// Salesforce: the CSM database has no copy, so invitation checks read it
+	// here at the moment they run.
+	DomainList *string `json:"domainList"`
+	// Address is the account's billing address; Owner is the Salesforce
+	// account owner (the CSM account manager).
+	Address *CustomerAddress `json:"address"`
+	Owner   *CustomerUser    `json:"owner"`
+	// ActivationDate and LostDate are Salesforce dates ("2006-01-02").
+	ActivationDate *string `json:"activationDate"`
+	LostDate       *string `json:"lostDate"`
+	LostReason     *string `json:"lostReason"`
+	// LastModifiedDate is the record version the Account ingest's duplicate
+	// guard compares; only the realtime path returns it.
+	LastModifiedDate *string `json:"lastModifiedDate"`
+
+	// The fields below arrive with the Sales Entity "customer fields" change
+	// (SE-1 in docs/customer-onboarding/SALESFORCE_SYNC_PLAN.md). Until it is
+	// deployed they are absent and decode as nil, and the Account ingest
+	// keeps the stored value of the columns they feed.
+	CsmEmail                *string       `json:"csmEmail"`
+	SecondaryTechnicalOwner *string       `json:"secondaryTechnicalOwner"`
+	RenewalManager          *CustomerUser `json:"renewalManager"`
+	AccountVertical         *string       `json:"accountVertical"`
+	LostReasonCategory      *string       `json:"lostReasonCategory"`
+	DeactivationDate        *string       `json:"deactivationDate"`
+	IsPartner               *bool         `json:"isPartner"`
+}
+
+// CustomerAddress is the billing part of a Customer's address.
+type CustomerAddress struct {
+	BillingStreet     *string `json:"billingStreet"`
+	BillingCity       *string `json:"billingCity"`
+	BillingState      *string `json:"billingState"`
+	BillingPostalCode *string `json:"billingPostalCode"`
+	BillingCountry    *string `json:"billingCountry"`
+}
+
+// CustomerUser is a Salesforce user referenced by a Customer (owner, renewal
+// manager). The ingest resolves it to a CSM user by email.
+type CustomerUser struct {
+	Email *string `json:"email"`
 }
 
 type customerSearchRequest struct {
 	IDs        []string `json:"ids"`
 	IsRealTime bool     `json:"isRealTime"`
 	Limit      int      `json:"limit"`
+}
+
+// ProjectContact is one Salesforce Project_Contact__c (a contact's membership
+// of a project) as returned by REST sales/sales-entity-service
+// POST /project-contacts/search. Field names follow that service's contract
+// (a project is a "subscription", an account id a "customerId").
+type ProjectContact struct {
+	ID               string                      `json:"id"`
+	Email            string                      `json:"email"`
+	State            *string                     `json:"state"`
+	Role             *string                     `json:"role"`
+	Roles            []string                    `json:"roles"`
+	Type             *string                     `json:"type"`
+	Contact          *ProjectContactContact      `json:"contact"`
+	Subscription     *ProjectContactSubscription `json:"subscription"`
+	CreatedDate      *string                     `json:"createdDate"`
+	LastModifiedDate *string                     `json:"lastModifiedDate"`
+}
+
+// ProjectContactContact is the linked Contact of a ProjectContact.
+type ProjectContactContact struct {
+	ID         *string `json:"id"`
+	Name       *string `json:"name"`
+	Email      *string `json:"email"`
+	CustomerID *string `json:"customerId"`
+}
+
+// ProjectContactSubscription is the linked Project of a ProjectContact.
+type ProjectContactSubscription struct {
+	ID         *string `json:"id"`
+	Name       *string `json:"name"`
+	Key        *string `json:"key"`
+	CustomerID *string `json:"customerId"`
+}
+
+// Contact is the subset of a REST sales/sales-entity-service Contact
+// (POST /contacts/search) the membership ingest and the Contact writer need.
+type Contact struct {
+	ID                  *string             `json:"id"`
+	Email               *string             `json:"email"`
+	Name                *string             `json:"name"`
+	FirstName           *string             `json:"firstName"`
+	LastName            *string             `json:"lastName"`
+	IsCsAdmin           *bool               `json:"isCsAdmin"`
+	IsCsIntegrationUser *bool               `json:"isCsIntegrationUser"`
+	LockoutStatus       *bool               `json:"lockoutStatus"`
+	Account             *ContactAccount     `json:"account"`
+	Memberships         []ContactMembership `json:"memberships"`
+	LastModifiedDate    *string             `json:"lastModifiedDate"`
+
+	// IsPrimaryContact is Contact.primary_contact__c, written to
+	// account_contact.is_primary_contact. Sales Entity always sends it; nil
+	// means a response without the key, and the stored value is then kept.
+	IsPrimaryContact *bool `json:"isPrimaryContact"`
+	// AccountID is the contact's parent account Id, exposed flat beside the
+	// nested account.id (the two carry the same value).
+	AccountID *string `json:"accountId"`
+	// UserActive is Contact.User_Active__c. It is decoded ahead of the Sales
+	// Entity release that exposes it and is not written anywhere yet; nil
+	// while Sales Entity does not send it.
+	UserActive *bool `json:"userActive"`
+}
+
+// ContactAccount is the parent account of a Contact.
+type ContactAccount struct {
+	ID             *string `json:"id"`
+	Classification *string `json:"classification"`
+	IsPartner      *bool   `json:"isPartner"`
+}
+
+// ContactMembership is one Project_Contacts__r row embedded in a Contact.
+type ContactMembership struct {
+	ID             *string `json:"id"`
+	SubscriptionID *string `json:"subscriptionId"`
+	State          *string `json:"state"`
+	Role           *string `json:"role"`
+	Type           *string `json:"type"`
+}
+
+type idSearchRequest struct {
+	ID    string `json:"id"`
+	Limit int    `json:"limit"`
 }
 
 type tokenResponse struct {
@@ -123,6 +257,110 @@ func (c *Client) GetCustomer(ctx context.Context, id string) (Customer, error) {
 		}
 	}
 	return cust, err
+}
+
+// GetProjectContact fetches one Salesforce Project_Contact__c by Id via
+// POST /project-contacts/search {id}. An empty result is a
+// ServiceUnavailableError so the caller can retry — the Salesforce event can
+// arrive before the record is visible to the query, same as GetCustomer.
+func (c *Client) GetProjectContact(ctx context.Context, id string) (ProjectContact, error) {
+	var rows []ProjectContact
+	if err := c.searchWithRetry(ctx, projectContactSearchPath, idSearchRequest{ID: id, Limit: 1}, "project contact", &rows); err != nil {
+		return ProjectContact{}, err
+	}
+	for _, pc := range rows {
+		if salesforceIDEqual(pc.ID, id) {
+			return pc, nil
+		}
+	}
+	if len(rows) == 0 {
+		return ProjectContact{}, &apierror.ServiceUnavailableError{Msg: "salesentity: project contact not found"}
+	}
+	return ProjectContact{}, &apierror.ServiceUnavailableError{Msg: "salesentity: project-contacts/search returned an unexpected project contact"}
+}
+
+// GetContact fetches one Salesforce Contact by Id via POST /contacts/search
+// {id}, with the same empty-result semantics as GetProjectContact.
+func (c *Client) GetContact(ctx context.Context, id string) (Contact, error) {
+	var rows []Contact
+	if err := c.searchWithRetry(ctx, contactSearchPath, idSearchRequest{ID: id, Limit: 1}, "contact", &rows); err != nil {
+		return Contact{}, err
+	}
+	for _, ct := range rows {
+		if ct.ID != nil && salesforceIDEqual(*ct.ID, id) {
+			return ct, nil
+		}
+	}
+	if len(rows) == 0 {
+		return Contact{}, &apierror.ServiceUnavailableError{Msg: "salesentity: contact not found"}
+	}
+	return Contact{}, &apierror.ServiceUnavailableError{Msg: "salesentity: contacts/search returned an unexpected contact"}
+}
+
+// searchWithRetry POSTs a search body to path and decodes the JSON array
+// response into out, refreshing the token once on 401 (the same policy
+// GetCustomer applies).
+func (c *Client) searchWithRetry(ctx context.Context, path string, body any, what string, out any) error {
+	err := c.search(ctx, path, body, what, out)
+	if errors.Is(err, errCustomerUnauthorized) {
+		c.invalidateToken()
+		err = c.search(ctx, path, body, what, out)
+		if errors.Is(err, errCustomerUnauthorized) {
+			return &apierror.UnauthorizedError{Msg: "salesentity: " + path + " unauthorized"}
+		}
+	}
+	return err
+}
+
+// search performs one authenticated POST of body to path and decodes a 2xx
+// JSON array into out. Status handling mirrors getCustomer: 401 →
+// errCustomerUnauthorized (for the caller's single token refresh), 404 and
+// 5xx → ServiceUnavailableError, other non-2xx → DownstreamError.
+func (c *Client) search(ctx context.Context, path string, body any, what string, out any) error {
+	token, err := c.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("salesentity: marshal %s request: %w", path, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("salesentity: build %s request: %w", path, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return err
+		}
+		return &apierror.ServiceUnavailableError{Msg: fmt.Sprintf("salesentity: %s request: %v", path, err)}
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("salesentity: read %s response: %w", path, err)
+	}
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("salesentity: parse %s response: %w", path, err)
+		}
+		return nil
+	case resp.StatusCode == http.StatusUnauthorized:
+		return errCustomerUnauthorized
+	case resp.StatusCode == http.StatusNotFound:
+		return &apierror.ServiceUnavailableError{Msg: "salesentity: " + what + " not found"}
+	case resp.StatusCode >= 500:
+		return &apierror.ServiceUnavailableError{Msg: fmt.Sprintf("salesentity: %s returned %d", path, resp.StatusCode)}
+	default:
+		return &apierror.DownstreamError{Msg: fmt.Sprintf("salesentity rejected %s (status %d)", path, resp.StatusCode)}
+	}
 }
 
 func (c *Client) getCustomer(ctx context.Context, id string) (Customer, error) {

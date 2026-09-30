@@ -66,13 +66,20 @@ type GithubSyncRepository interface {
 	// than a webhook -- filing an issue starts from the account, not the repo.
 	// Not found is (nil, nil); an inactive mapping counts as not found.
 	RepoForAccount(ctx context.Context, accountID string) (*RepoMapping, error)
+	// CaseByIssueNumber finds the work item an issue is linked to, within one
+	// account. Comments relayed from GitHub go here, not onto the change
+	// request: github_comment_to_sn.yml PATCHes the case, and the outbound
+	// trigger only watches case comments -- attaching them to the change
+	// request instead left a conversation nobody could reply to.
+	// Not found is ("", nil).
+	CaseByIssueNumber(ctx context.Context, accountID string, issueNumber int) (string, error)
 	// AccountForCase resolves the case's owning account.
 	AccountForCase(ctx context.Context, caseID string) (string, error)
 	// SetCaseGithubIssueNumber links a case to the issue filed for it.
 	//
 	// THIS IS WHAT OPENS GATE 2. Until a case carries an issue number the
 	// outbound triggers enqueue nothing for it, so this single write is what
-	// switches on sync for that case -- see migration 000069.
+	// switches on sync for that case -- see migration 0112.
 	SetCaseGithubIssueNumber(ctx context.Context, caseID string, issueNumber int) (changed bool, err error)
 	// ChangeRequestByGitReference finds the change request linked to an issue.
 	ChangeRequestByGitReference(ctx context.Context, issueURL string) (*GithubChangeRequest, error)
@@ -223,7 +230,7 @@ func (r *githubSyncRepository) SetCaseGithubIssueNumber(ctx context.Context, cas
 	// IS DISTINCT FROM, matching SetState: re-linking a case to the issue it
 	// already points at should write nothing.
 	const query = `
-		UPDATE "case"
+		UPDATE work_item
 		SET github_issue_number = $2
 		WHERE id = $1::uuid AND github_issue_number IS DISTINCT FROM $2`
 	tag, err := r.db.Exec(ctx, query, caseID, issueNumber)
@@ -231,4 +238,23 @@ func (r *githubSyncRepository) SetCaseGithubIssueNumber(ctx context.Context, cas
 		return false, fmt.Errorf("github: link case %s to issue %d: %w", caseID, issueNumber, err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// CaseByIssueNumber implements GithubSyncRepository.
+func (r *githubSyncRepository) CaseByIssueNumber(ctx context.Context, accountID string, issueNumber int) (string, error) {
+	// Scoped to the account as well as the issue number: two accounts can each
+	// have an issue #23, in different repositories.
+	const query = `
+		SELECT wi.id::text
+		FROM work_item wi
+		WHERE wi.github_issue_number = $2 AND wi.account_id = $1::uuid`
+	var id string
+	err := r.db.QueryRow(ctx, query, accountID, issueNumber).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("github: case for issue %d: %w", issueNumber, err)
+	}
+	return id, nil
 }

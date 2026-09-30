@@ -48,6 +48,7 @@ import {
 } from "@wso2/oxygen-ui-icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useLocation } from "react-router";
+import { ApiQueryKeys } from "@constants/apiConstants";
 import { useGetCsmCaseDetail } from "@features/csm-cases/api/useGetCsmCaseDetail";
 import { useCurrentUser } from "@context/current-user/CurrentUserContext";
 import { usePortalAccess } from "@context/current-user/usePortalAccess";
@@ -71,7 +72,9 @@ import { beStateFromUi, priorityFromSeverity } from "@api/backend/mappers";
 import type { Severity } from "@features/csm-dashboard/types/abtDashboard";
 import { BackendApiError } from "@api/backend/client";
 import {
+  useDeleteComment,
   useGetCsmCaseComments,
+  usePatchComment,
   usePostCsmCaseComment,
 } from "@features/csm-cases/api/useCsmCaseComments";
 import { useGetCsmConversationMessages } from "@features/csm-cases/api/useCsmConversationMessages";
@@ -170,6 +173,7 @@ import { caseIdLabel } from "@features/csm-cases/utils/caseIdentity";
 import { useReportCaseTabDraft } from "@features/case-tabs/hooks/useReportCaseTabDraft";
 import { useReportCaseTabMeta } from "@features/case-tabs/hooks/useReportCaseTabMeta";
 import { useCaseRouteOverride } from "@context/case-tabs/CaseRouteOverrideContext";
+import { replaceUuids } from "@utils/redactIds";
 import { formatAbsoluteForUser } from "@utils/dateTime";
 import {
   isBlankHtml,
@@ -308,6 +312,9 @@ type CaseTabId =
   | "call-requests"
   | "tasks";
 
+// Paused product-wide pending an upstream Task data-model decision. Flip to
+// true to restore; nothing else needs to change.
+const TASKS_FEATURE_ENABLED = false;
 
 const TAB_DEFS: Array<{
   id: CaseTabId;
@@ -517,16 +524,16 @@ export default function CsmCaseDetailPage(): JSX.Element {
   // adds a comment or the case's status changes, so this tab doesn't rely
   // solely on their own staleTime/a manual refresh to catch up.
   useCaseActivityStream(caseId);
-  // Case Feedback (CSAT survey) submissions for this case, if any — almost
-  // always empty for an open case (the survey goes out after closure), which
-  // is expected and renders no feedback lane rather than an error.
+  // Case Feedback (CSAT survey) submissions for this case, if any — the
+  // survey only exists once a case is closed, so the query itself is
+  // disabled until then rather than firing early for an open case.
   const {
     data: caseFeedback,
     isLoading: isFeedbackLoading,
     isError: isFeedbackError,
     refetch: refetchFeedback,
     isFetching: isFetchingFeedback,
-  } = useGetCsmCaseFeedback(caseId);
+  } = useGetCsmCaseFeedback(caseId, data?.state === "closed");
   // The chat transcript the case was spawned from, when linked. Loaded lazily
   // off the case's conversation id and merged into the comment stream below so
   // it renders as the earliest activity entries — mirrors the customer portal.
@@ -540,6 +547,25 @@ export default function CsmCaseDetailPage(): JSX.Element {
     isFetching: isFetchingChat,
   } = useGetCsmConversationMessages(data?.conversationId);
   const postComment = usePostCsmCaseComment();
+  const patchComment = usePatchComment();
+  const deleteComment = useDeleteComment();
+  const onEditComment = useCallback(
+    (commentId: string, content: string) =>
+      patchComment.mutateAsync({
+        commentId,
+        content,
+        invalidateQueryKey: [ApiQueryKeys.CSM_CASE_COMMENTS, caseId],
+      }),
+    [patchComment, caseId],
+  );
+  const onDeleteComment = useCallback(
+    (commentId: string) =>
+      deleteComment.mutateAsync({
+        commentId,
+        invalidateQueryKey: [ApiQueryKeys.CSM_CASE_COMMENTS, caseId],
+      }),
+    [deleteComment, caseId],
+  );
   const {
     data: attachments,
     isLoading: isAttachmentsLoading,
@@ -566,7 +592,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
     isFetching: isFetchingCallRequests,
   } = useGetCsmCaseCallRequests(isAnnouncement ? undefined : caseId);
   const { data: caseTasks } = useSearchCaseTasks(
-    isAnnouncement ? undefined : caseId,
+    TASKS_FEATURE_ENABLED && !isAnnouncement ? caseId : undefined,
   );
   // The backend only serves time cards to roles that can use them, so the query
   // is skipped (undefined id disables it) rather than left to 403.
@@ -596,6 +622,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
   const {
     data: caseProject,
     isLoading: isCaseProjectLoading,
+    isError: isCaseProjectError,
     refetch: refetchCaseProject,
     isFetching: isFetchingCaseProject,
   } = useGetProject(data?.projectId);
@@ -1530,19 +1557,33 @@ export default function CsmCaseDetailPage(): JSX.Element {
     proceedLifecycleTransition(action, targetState);
   }, [noPublicCommentConfirm, proceedLifecycleTransition]);
 
-  // Assign the case to the chosen engineer via PATCH { assigneeEmail }. The
-  // detail query is invalidated by the hook, so the assignee display refreshes
-  // on success. (ServiceNow-source only; the BE rejects it for PG cases.)
+  // Assign the case to the chosen engineer via PATCH { assigneeEmail }, or
+  // clear the assignee via PATCH { assigneeEmail: null }. The detail query is
+  // invalidated by the hook, so the assignee display refreshes on success.
+  // Supported for both data sources on this branch (the Postgres path has
+  // its own native assignee handling, see entity-service's updateCaseAssignee).
   const onAssign = useCallback(
-    (email: string) => {
+    (email: string | null) => {
       patchCase.mutate(
         { assigneeEmail: email },
         {
           onSuccess: () => {
             setAssignOpen(false);
-            showSuccess("Case reassigned.");
+            showSuccess(email === null ? "Case unassigned." : "Case reassigned.");
           },
-          onError: (err) => showError("Could not reassign the case.", err),
+          onError: (err) => {
+            // SN can reject a clear/reassign for state reasons (e.g. "cannot
+            // be changed for Work In Progress - Ongoing") — surface that
+            // 4xx message verbatim rather than the generic fallback, same
+            // treatment as every other 4xx on this page.
+            const msg =
+              err instanceof BackendApiError && err.status < 500 && err.message
+                ? err.message
+                : email === null
+                  ? "Could not unassign the case."
+                  : "Could not reassign the case.";
+            showError(msg, err);
+          },
         },
       );
     },
@@ -1672,12 +1713,14 @@ export default function CsmCaseDetailPage(): JSX.Element {
               sticky: false,
             }),
           onError: (err) => {
-            // The watch-list 400s name the offending value (an unknown or
-            // malformed user id), which is far more actionable than a generic
-            // string — same treatment as every other 4xx on this page.
+            // The watch-list 4xx messages name the offending user by id, which
+            // is meaningful to a log but not to the person reading the toast, so
+            // the id is swapped for "that user". The rest of the message (e.g.
+            // "... is not a contact on this case's project") is the actionable
+            // part and is kept.
             const msg =
               err instanceof BackendApiError && err.status < 500 && err.message
-                ? err.message
+                ? replaceUuids(err.message, "user")
                 : action === "add"
                   ? "Could not add the watcher."
                   : "Could not remove the watcher.";
@@ -1817,15 +1860,29 @@ export default function CsmCaseDetailPage(): JSX.Element {
 
   const onSetFixEta = useCallback(
     (patch: FixEtaSavePayload) => {
+      // Same stale-response guard as onRequestUpdate below: the page stays
+      // mounted when caseId changes and usePatchCsmCase doesn't cancel an
+      // in-flight PATCH, so this case's response can arrive while another
+      // case is on screen. Closing the dialog on a stale success would shut
+      // the *new* case's dialog and throw away whatever was typed into it.
+      const submittedViewToken = caseViewTokenRef.current;
       patchCase.mutate(patch as BeCaseUpdatePayload, {
         onSuccess: () => {
+          if (caseViewTokenRef.current !== submittedViewToken) return;
+          // Close on success, same as every other dialog on this page. The
+          // PATCH lands either way, so leaving it open reads as a failed save
+          // and invites a second submit of an estimate that's already stored.
+          setFixEtaOpen(false);
           setFeedback({
             message: "Fix ETA updated.",
             severity: "success",
             sticky: false,
           });
         },
-        onError: (err) => showError("Could not set the fix ETA.", err),
+        onError: (err) => {
+          if (caseViewTokenRef.current !== submittedViewToken) return;
+          showError("Could not set the fix ETA.", err);
+        },
       });
     },
     [patchCase, showError],
@@ -2176,6 +2233,9 @@ export default function CsmCaseDetailPage(): JSX.Element {
   // more than the real (server-side) gate is likely to. This is UI-only — the
   // entity-service enforces the authoritative close gate, and a rejection
   // still surfaces via showError even if this signal is stale or absent.
+  // While TASKS_FEATURE_ENABLED is false, `caseTasks` is always undefined, so
+  // this advisory never fires — the closure UI just falls silent on it,
+  // rather than misleadingly claiming "no open tasks".
   const hasOpenTask = (caseTasks?.tasks ?? []).some((t) => t.state === "OPEN");
   const closeBlockedReason = hasOpenTask
     ? "This case has an open task. Closing may be rejected until it's resolved or closed."
@@ -2217,21 +2277,23 @@ export default function CsmCaseDetailPage(): JSX.Element {
         >
           Back
         </Button>
-        <ExportPdfButton
-          onExport={handleExportCasePdf}
-          disabled={
-            isCommentsLoading ||
-            isActivityLoading ||
-            isAttachmentsLoading ||
-            isFeedbackLoading ||
-            isChatLoading ||
-            isCommentsError ||
-            isActivityError ||
-            isAttachmentsError ||
-            isFeedbackError ||
-            isChatError
-          }
-        />
+        {canWrite && (
+          <ExportPdfButton
+            onExport={handleExportCasePdf}
+            disabled={
+              isCommentsLoading ||
+              isActivityLoading ||
+              isAttachmentsLoading ||
+              isFeedbackLoading ||
+              isChatLoading ||
+              isCommentsError ||
+              isActivityError ||
+              isAttachmentsError ||
+              isFeedbackError ||
+              isChatError
+            }
+          />
+        )}
       </Box>
 
       <Box
@@ -2682,11 +2744,17 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   feedback={caseFeedback ?? []}
                   callRequests={callRequests ?? []}
                   onDownloadAttachment={canDownloadAttachment ? onDownloadAttachment : undefined}
-                  preview={{
-                    onGetPreviewContent: getAttachmentPreviewContent,
-                    previewTarget,
-                    onPreviewTargetChange: setPreviewTarget,
-                  }}
+                  preview={
+                    canDownloadAttachment
+                      ? {
+                          onGetPreviewContent: getAttachmentPreviewContent,
+                          previewTarget,
+                          onPreviewTargetChange: setPreviewTarget,
+                        }
+                      : undefined
+                  }
+                  onEditComment={onEditComment}
+                  onDeleteComment={onDeleteComment}
                 />
               </>
             )}
@@ -2826,7 +2894,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   variant="outlined"
                   startIcon={<LinkIcon size={14} />}
                   onClick={() => setLinkCaseOpen(true)}
-                  disabled={isClosed}
+                  disabled={isClosed || !canWrite}
                 >
                   Link to another case
                 </Button>
@@ -2870,7 +2938,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
             <LinkedServiceRequestsWidget
               caseId={c.id}
               linkedServiceRequests={c.linkedServiceRequests}
-              createDisabled={isClosed}
+              createDisabled={isClosed || !canWrite}
               onCreateServiceRequest={() => {
                 const navState: CreateServiceRequestFromCaseNavState = {
                   projectId: c.projectId,
@@ -2896,7 +2964,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
           <WatchersWidget
             entityKind="case"
             watchers={c.watchers}
-            onReplace={onReplaceWatchers}
+            onReplace={canWrite ? onReplaceWatchers : undefined}
             isSaving={patchCase.isPending}
             onRefresh={() => void refetchCaseDetail()}
             isRefreshing={isFetchingCaseDetail}
@@ -2943,11 +3011,15 @@ export default function CsmCaseDetailPage(): JSX.Element {
             onDownload={canDownloadAttachment ? onDownloadAttachment : undefined}
             onDelete={canWrite ? setPendingDelete : undefined}
             deletingId={deleteAttachment.isPending ? pendingDelete?.id : null}
-            preview={{
-              onGetPreviewContent: getAttachmentPreviewContent,
-              previewTarget,
-              onPreviewTargetChange: setPreviewTarget,
-            }}
+            preview={
+              canDownloadAttachment
+                ? {
+                    onGetPreviewContent: getAttachmentPreviewContent,
+                    previewTarget,
+                    onPreviewTargetChange: setPreviewTarget,
+                  }
+                : undefined
+            }
           />
         </Box>
       )}
@@ -2973,7 +3045,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
         </Box>
       )}
 
-      {activeTab === "tasks" && caseId && (
+      {TASKS_FEATURE_ENABLED && activeTab === "tasks" && caseId && (
         <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr" }}>
           <TasksWidget caseId={caseId} />
         </Box>
@@ -3107,6 +3179,10 @@ export default function CsmCaseDetailPage(): JSX.Element {
           currentDeployedProductId={c.productContext.deployedProductId}
           isSaving={patchCase.isPending}
           onClose={() => setEditDetailsOpen(false)}
+          onAllSaved={() => {
+            setEditDetailsOpen(false);
+            setFeedback({ message: "Case details saved.", severity: "success", sticky: false });
+          }}
           onSubmit={onEditCaseDetails}
         />
       )}
@@ -3128,7 +3204,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
         />
       )}
 
-      {createTaskOpen && (
+      {TASKS_FEATURE_ENABLED && createTaskOpen && (
         <CreateTaskDialog
           isSaving={createTask.isPending}
           onClose={() => setCreateTaskOpen(false)}
@@ -3236,6 +3312,13 @@ export default function CsmCaseDetailPage(): JSX.Element {
           defaultTitle={c.subject}
           defaultDescription={c.description}
           showRepoField={isCloudSupportSubscription(caseProject?.subscriptionType)}
+          productName={c.product}
+          onboardingInProgress={caseProject?.onboardingStatus === "In-Progress"}
+          projectStatusPending={Boolean(c.projectId) && caseProject === undefined && !isCaseProjectError}
+          projectStatusFailed={Boolean(c.projectId) && isCaseProjectError}
+          onRetryProjectStatus={() => {
+            void refetchCaseProject();
+          }}
           onClose={() => {
             setGithubIssueOpen(false);
             setGithubIssueError(null);
@@ -3255,6 +3338,23 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   // done reading the confirmation.
                   setActiveTab("activities");
                   setGithubIssueResult(res);
+                  const tagLabels = ["s_dp"];
+                  if (payload.regression) tagLabels.push("s_rg");
+                  if (payload.reason === "migration") tagLabels.push("migration");
+                  // Each mutateAsync promise is handled on its own. Per-call
+                  // callbacks on mutate are replaced by the next call.
+                  void Promise.all(
+                    tagLabels.map(async (label) => {
+                      try {
+                        await addTag.mutateAsync(label);
+                      } catch (err) {
+                        showError(
+                          `The GitHub issue was created, but the case tag "${label}" could not be added.`,
+                          err,
+                        );
+                      }
+                    }),
+                  );
                 },
                 onError: (err) => {
                   // Surface the backend's own message on 4xx (invalid state,

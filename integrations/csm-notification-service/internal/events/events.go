@@ -48,13 +48,15 @@ const (
 	TypeSeverityChanged  Type = "case.severity_changed"
 	TypeIncidentCreated  Type = "incident.created"
 
-	// TypeSLAClockRegister and TypeSLATierReached belong to internal/slaengine,
-	// not internal/dispatch — see SLAClockRegisterPayload/SLATierReachedPayload
-	// below. Neither is an email trigger (no Recipients), so dispatch.Handle's
-	// switch has no case for them; they're declared here anyway since this is
-	// the one place every event Type this service touches is registered.
-	TypeSLAClockRegister Type = "sla.clock.register"
-	TypeSLATierReached   Type = "sla.tier_reached"
+	// TypeSLATierReached belongs to internal/slaengine, not internal/dispatch
+	// — see SLATierReachedPayload below. Not an email trigger (no
+	// Recipients), so dispatch.Handle's switch has no case for it; it's
+	// declared here anyway since this is the one place every event Type
+	// this service touches is registered. Published by internal/slaengine's
+	// own Engine.Tick (polling entity-service's GET /sla-status, not
+	// consuming a Kafka registration event — this service no longer has
+	// one; see that package's own doc comment for the full redesign).
+	TypeSLATierReached Type = "sla.tier_reached"
 
 	// TypeCRApprovalRequested is published by csm-flow-service's
 	// cr_approval_notice flow when a change request enters an approval state.
@@ -64,18 +66,17 @@ const (
 	TypeCRApprovalRequested Type = "change_request.approval_requested"
 
 	// TypeCaseBillableStatusChanged is Postgres-data-source-only on the
-	// entity-service side, and — like TypeSLAClockRegister/TypeSLATierReached
-	// above — not an email/Chat trigger, so dispatch.Handle's switch has no
-	// case for it either. Unlike those two, it isn't even handled by
-	// dispatch's own no-op case: internal/timecardengine.Engine consumes it
-	// instead, on its own dedicated consumer group (see
-	// cmd/server/main.go's TIME_CARD_CONSUMER_GROUP/_COUNT) — the
-	// same reasoning internal/slaengine's SLA_CONSUMER_GROUP/
-	// SLA_CONSUMER_COUNT already established: eventbus.Consumer.Run
-	// processes one record at a time, fully sequentially (fetch, handle,
-	// commit, repeat), so a future bulk update over "several time cards,"
-	// each its own HTTP round trip to entity-service, must not delay
-	// unrelated email/Chat delivery on dispatch's own consumer instance.
+	// entity-service side, and — like TypeSLATierReached above — not an
+	// email/Chat trigger, so dispatch.Handle's switch has no
+	// case for it either. Unlike TypeSLATierReached, it isn't even handled
+	// by dispatch's own no-op case: internal/timecardengine.Engine consumes
+	// it instead, on its own dedicated consumer group (see
+	// cmd/server/main.go's TIME_CARD_CONSUMER_GROUP/_COUNT) — because
+	// eventbus.Consumer.Run processes one record at a time, fully
+	// sequentially (fetch, handle, commit, repeat), so a future bulk update
+	// over "several time cards," each its own HTTP round trip to
+	// entity-service, must not delay unrelated email/Chat delivery on
+	// dispatch's own consumer instance.
 	//
 	// TODO: internal/timecardengine.Engine.Handle only logs today — the
 	// actual reaction (bulk-flipping every time card's billable flag for
@@ -89,6 +90,18 @@ const (
 	// internal/events/events.go, so the two schemas never drift even while
 	// this type is otherwise dormant.
 	TypeCaseBillableStatusChanged Type = "case.billable_status_changed"
+
+	// TypeProjectContactInvited is published by entity-service's Salesforce
+	// membership ingest once a Project_Contact__c in state INVITED /
+	// RE-INVITED has been written to Postgres (see that repo's own CLAUDE.md,
+	// "Salesforce membership ingest and onboarding steps"). This service is
+	// its consumer: dispatch.handleProjectContactInvited provisions the
+	// invitee's Asgardeo identity through the SCIM operations service
+	// (internal/scim) and sends the invitation email, recording each step's
+	// outcome back on entity-service's onboarding-step ledger
+	// (internal/entity.RecordOnboardingStep). Keyed by the Salesforce
+	// membership Id — see ProjectContactInvitedPayload.
+	TypeProjectContactInvited Type = "project_contact.invited"
 )
 
 // KnownTypes lists every Type this service accepts, in the order they're
@@ -96,8 +109,9 @@ const (
 // that enumerate valid values.
 var KnownTypes = []Type{
 	TypeCaseCreated, TypeCommentAdded, TypeStatusChanged, TypeCaseAssigned, TypeCaseAcknowledged, TypeSeverityChanged, TypeIncidentCreated,
-	TypeSLAClockRegister, TypeSLATierReached, TypeCaseBillableStatusChanged,
+	TypeSLATierReached, TypeCaseBillableStatusChanged,
 	TypeCRApprovalRequested, TypeCRPlanDateNotice,
+	TypeProjectContactInvited,
 }
 
 // Envelope is the wire shape of every record on the event bus: Payload's
@@ -160,16 +174,31 @@ type CaseCreatedPayload struct {
 	// caseIdLabel). internal/dispatch's subjectLine uses this in the
 	// subject's first slot, falling back to CaseID only when a publisher
 	// hasn't sent it yet.
-	WSO2CaseID                string   `json:"wso2CaseId,omitempty"`
-	CaseTitle                 string   `json:"caseTitle"`
-	CaseType                  string   `json:"caseType"`
-	Priority                  string   `json:"priority"`
-	Product                   string   `json:"product,omitempty"`
+	WSO2CaseID string `json:"wso2CaseId,omitempty"`
+	CaseTitle  string `json:"caseTitle"`
+	CaseType   string `json:"caseType"`
+	Priority   string `json:"priority"`
+	Product    string `json:"product,omitempty"`
+	// Team is the case's account's CRE team display name (e.g. "Castor") —
+	// displayed in Chat cards; purely a display value, no routing role
+	// (unlike Product).
 	Team                      string   `json:"team,omitempty"`
 	CreatedAt                 string   `json:"createdAt"`
 	Description               string   `json:"description"`
 	IncidentImpactDescription string   `json:"incidentImpactDescription,omitempty"`
 	Recipients                []string `json:"recipients"`
+	// ProjectOnboardingStatus/IsEvaluationAccount are deprecated and unused
+	// — a since-reverted feature briefly routed this event's Chat alert by
+	// team/audience and needed these two facts; case.created is back to
+	// product-based routing (see Product above) and no longer reads
+	// either. Kept, accepting-but-ignoring the value, purely so
+	// events.Validate's strict decode doesn't reject a payload from an
+	// entity-service deployment that hasn't yet redeployed past that
+	// revert — entity-service and csm-notification-service are separate
+	// deployables with no atomic joint-deploy guarantee. Remove once both
+	// services are known to have deployed past the revert.
+	ProjectOnboardingStatus string `json:"projectOnboardingStatus,omitempty"`
+	IsEvaluationAccount     bool   `json:"isEvaluationAccount,omitempty"`
 }
 
 // CommentAddedPayload is TypeCommentAdded's payload. See CaseCreatedPayload's
@@ -257,6 +286,11 @@ type CaseAcknowledgedPayload struct {
 	Product          string `json:"product,omitempty"`
 	Team             string `json:"team,omitempty"`
 	AcknowledgerName string `json:"acknowledgerName"`
+	// ProjectOnboardingStatus/IsEvaluationAccount are deprecated and
+	// unused — see CaseCreatedPayload's own doc comment for why this
+	// decode-compatibility pair exists.
+	ProjectOnboardingStatus string `json:"projectOnboardingStatus,omitempty"`
+	IsEvaluationAccount     bool   `json:"isEvaluationAccount,omitempty"`
 }
 
 // SeverityChangedPayload is TypeSeverityChanged's payload. Unlike
@@ -281,26 +315,30 @@ type SeverityChangedPayload struct {
 	Product     string   `json:"product,omitempty"`
 	Team        string   `json:"team,omitempty"`
 	Recipients  []string `json:"recipients"`
+	// ProjectOnboardingStatus/IsEvaluationAccount are deprecated and
+	// unused — see CaseCreatedPayload's own doc comment for why this
+	// decode-compatibility pair exists.
+	ProjectOnboardingStatus string `json:"projectOnboardingStatus,omitempty"`
+	IsEvaluationAccount     bool   `json:"isEvaluationAccount,omitempty"`
 }
 
-// IncidentCreatedPayload is TypeIncidentCreated's payload. Unlike the case.*
-// events above, this one has two reactions, not one: a Google Chat alert
-// (Product/Title/ShortDescription map onto GoogleChatClient.SendIncidentAlert's
-// params, alongside the portal link — see below) and a Twilio voice call to
-// CallTo, reading Title and ShortDescription aloud.
+// IncidentCreatedPayload is TypeIncidentCreated's payload. This event has
+// exactly one reaction now — a Twilio voice call to CallTo, reading Title
+// and ShortDescription aloud — per explicit product direction: an incident
+// pages on-call directly, and a separate Chat post was redundant with that.
 //
-// There is deliberately no IncidentLink field: unlike an earlier version of
-// this struct, the "Open in Portal" button target is built by this service
-// itself (dispatch.handleIncidentCreated calls
-// recipientlinks.Resolver.IncidentLink(entityID)), the same way case.created
-// already gets its own portal link built here rather than trusting a
-// caller-supplied one. A publisher only needs to know the fact that an
-// incident was created, not this service's portal URL configuration.
+// Product is still accepted on the wire but no longer read by
+// dispatch.handleIncidentCreated — kept purely for decode compatibility
+// (events.Validate decodes strictly, DisallowUnknownFields) during a rolling
+// deploy where a not-yet-redeployed publisher (e.g. entity-service) might
+// still send it; removing the field outright would need the same kind of
+// cross-service rollout coordination this repo has hit before (see
+// SeverityChangedPayload's own ProjectOnboardingStatus/IsEvaluationAccount
+// comment for the precedent). A future cleanup can drop it once every
+// publisher is confirmed to have stopped sending it.
 type IncidentCreatedPayload struct {
-	// Product selects which configured Google Chat space receives the alert
-	// (e.g. "api-manager"); matched case/whitespace-insensitively against
-	// GOOGLE_CHAT_SPACES.
-	Product          string `json:"product"`
+	// Product is unread — see this struct's own doc comment.
+	Product          string `json:"product,omitempty"`
 	Title            string `json:"title"`
 	ShortDescription string `json:"shortDescription"`
 	// CallTo is the on-call phone number (E.164, e.g. "+14155552671") the
@@ -308,58 +346,12 @@ type IncidentCreatedPayload struct {
 	CallTo string `json:"callTo"`
 }
 
-// SLAClockRegisterPayload is TypeSLAClockRegister's payload — the trigger
-// internal/slaengine.Handle reacts to by registering an SLA clock per entry
-// in Durations via entity-service's POST /cases/{caseId}/sla-clocks. Each
-// Durations value is a Go duration string (e.g. "2h"), added to the
-// publish-time "now" to compute the clock's due time — the exact durations
-// to use per clock type is a policy decision entity-service makes (see its
-// own internal/service/sla_policy.go) and supplies here directly, mirroring
-// how the SLA timer engine POC this was ported from treated durations as a
-// caller-supplied stand-in for that policy. CaseID must match the
-// envelope's EntityID, same requirement as the case.* types.
-//
-// AvoidWeekendDueDate names the subset of Durations' keys whose computed
-// due date must not land on a Saturday/Sunday — currently only ever
-// "resolution", for a MEDIUM-severity case's "1 Business Week" SLA (see
-// entity-service's sla_policy.go). internal/slaengine.registerClocks is
-// what actually performs the roll-forward, since only it knows the real
-// startedAt/dueAt at consume time; entity-service can only signal which
-// clock type needs it.
-//
-// CaseCreatedAt is an RFC3339 timestamp of the case's actual creation time
-// — internal/slaengine.registerClocks uses it (not consume-time "now") as
-// each clock's startedAt, so a delayed publish or consumer backlog doesn't
-// start the SLA clock late; an empty or unparsable value falls back to
-// consume-time "now" there.
-//
-// The remaining fields are purely for display in a Google Chat breach
-// card (see internal/slaengine.Engine.sendBreachAlert) and are stored
-// verbatim on the registered sla_clocks row so that card can be built from
-// one GetClock call at tick time, with no second lookup — this service has
-// no other way to reach case data. They're a point-in-time snapshot from
-// registration, not kept live; State/Priority in particular can go stale
-// by the time a breach actually fires.
-type SLAClockRegisterPayload struct {
-	CaseID              string            `json:"caseId"`
-	Durations           map[string]string `json:"durations"`
-	CaseCreatedAt       string            `json:"caseCreatedAt,omitempty"`
-	AvoidWeekendDueDate []string          `json:"avoidWeekendDueDate,omitempty"`
-	CaseNumber          string            `json:"caseNumber,omitempty"`
-	WSO2CaseID          string            `json:"wso2CaseId,omitempty"`
-	CaseTitle           string            `json:"caseTitle,omitempty"`
-	CaseType            string            `json:"caseType,omitempty"`
-	Product             string            `json:"product,omitempty"`
-	Team                string            `json:"team,omitempty"`
-	Priority            string            `json:"priority,omitempty"`
-	State               string            `json:"state,omitempty"`
-}
-
 // SLATierReachedPayload is TypeSLATierReached's payload — published by
-// internal/slaengine.Tick when a clock's wake index shows a tier (50, 75, or
-// 100) has been crossed. Nothing in this service consumes it yet; it exists
-// for whatever future notification (e.g. a breach-warning email) or other
-// system reacts to it.
+// internal/slaengine.Engine.Tick when a poll of entity-service's GET
+// /sla-status shows a clock has newly crossed a tier (50, 75, or 100
+// percent elapsed) since the last poll. Nothing in this service consumes it
+// yet; it exists for whatever future notification (e.g. a breach-warning
+// email) or other system reacts to it.
 type SLATierReachedPayload struct {
 	CaseID    string `json:"caseId"`
 	ClockType string `json:"clockType"`
@@ -435,4 +427,50 @@ type CRApprovalRequestedPayload struct {
 	// Recipients are already resolved and de-duplicated. Never empty — a notice
 	// with nobody to send to is not published.
 	Recipients []string `json:"recipients"`
+}
+
+// ProjectContactInvitedPayload is TypeProjectContactInvited's payload —
+// mirrors entity-service's own ProjectContactInvitedPayload exactly (keep
+// the two in sync by hand, the same way every other shared payload here
+// is): everything this service needs to provision the invited person and
+// address the invitation, so it never has to re-read Salesforce.
+//
+// MembershipSfID is the Salesforce Project_Contact__c Id — also the
+// envelope's EntityID (Validate enforces the match, like the case.* types'
+// CaseID) and the key every onboarding-step write is recorded under.
+// ContactSfID is the Salesforce Contact Id, passed through to the step
+// ledger for cross-referencing. GivenName/FamilyName may both be empty
+// (Salesforce doesn't require a first name) — dispatch falls back to the
+// email's local part for display. Roles are the raw Salesforce
+// Project_Role__c values (e.g. "Admin", "Portal user"), shown in the email
+// when non-empty. IsIntegrationUser=true means the contact is a machine
+// account that never signs in: dispatch records IDENTITY and EMAIL as
+// SKIPPED and does nothing else. Type is the Salesforce Contact_Type__c
+// ("OWN CONTACT" / "PARTNER CONTACT" / an integration-user type) — carried
+// for completeness, not used to branch on here today.
+type ProjectContactInvitedPayload struct {
+	MembershipSfID    string   `json:"membershipSfId"`
+	ContactSfID       string   `json:"contactSfId"`
+	Email             string   `json:"email"`
+	GivenName         string   `json:"givenName"`
+	FamilyName        string   `json:"familyName"`
+	ProjectName       string   `json:"projectName"`
+	ProjectKey        string   `json:"projectKey"`
+	Roles             []string `json:"roles"`
+	IsIntegrationUser bool     `json:"isIntegrationUser"`
+	Type              string   `json:"type"`
+	// EventModifiedOn is the Salesforce LastModifiedDate of the membership
+	// version this event describes (RFC 3339); dispatch stamps its
+	// onboarding-step writes with it. Optional: an empty value means
+	// entity-service could not parse the Salesforce date.
+	EventModifiedOn string `json:"eventModifiedOn,omitempty"`
+	// IsResend marks a deliberate re-invitation — an admin pressing
+	// "Resend invitation" in the portal, which entity-service republishes
+	// as this same event with the marker set. Optional: an absent value
+	// means a normal, first invitation. dispatch then skips the
+	// duplicate-invitation ledger check (the whole point of a resend is to
+	// send again) and uses the short reminder wording, which claims
+	// nothing about whether the account was just created — see
+	// dispatch.handleProjectContactInvited.
+	IsResend bool `json:"isResend,omitempty"`
 }

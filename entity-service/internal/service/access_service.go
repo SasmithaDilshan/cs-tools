@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/auth"
@@ -134,4 +135,38 @@ func resolveScopeForID(ctx context.Context, access AccessService, id string) (Ac
 		return AccessScope{}, err
 	}
 	return access.ResolveScope(ctx)
+}
+
+// authorizeProject refuses a caller who may not act on this project.
+//
+// Two kinds of endpoint need this. A by-id read takes the project id straight
+// from the request path, so validating only that the project EXISTS lets
+// anyone read any project's data by id -- an IDOR. And a write, or a call that
+// leaves the service entirely (the Choreo provisioning sequence), has nothing
+// to attach a scope predicate to in the first place. Scoped list endpoints get
+// this for free by folding the caller's AccessScope into their WHERE clause;
+// these check membership here instead, before doing anything.
+//
+// Refused as NotFound, never Forbidden, matching GetProjectByID/GetCaseByID: a
+// 403 would confirm the project exists to someone not entitled to know that.
+// Scope is resolved before any existence lookup, so the two cases are not
+// distinguishable by timing either.
+//
+// projectID is compared case-insensitively. Postgres renders uuid values in
+// lower case, but the id here comes from the request path, and a caller who
+// upper-cases a UUID they legitimately hold must not be locked out.
+func authorizeProject(ctx context.Context, access AccessService, projectID string) error {
+	scope, err := resolveScopeForID(ctx, access, projectID)
+	if err != nil {
+		return err
+	}
+	if scope.Unrestricted {
+		return nil
+	}
+	for _, id := range scope.ProjectIDs {
+		if strings.EqualFold(id, projectID) {
+			return nil
+		}
+	}
+	return &apierror.NotFoundError{Msg: "project not found"}
 }

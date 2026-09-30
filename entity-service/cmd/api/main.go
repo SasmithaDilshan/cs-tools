@@ -63,7 +63,7 @@ func main() {
 	}
 
 	addr := ":" + cfg.ServerPort
-	srv, eventPublisher := server.New(addr, pool, cfg)
+	srv, closePublishers := server.New(addr, pool, cfg)
 
 	// The outbound GitHub worker: drains github_outbound_queue and pushes
 	// change-request activity to the linked issue. Same gate as the webhook --
@@ -85,6 +85,19 @@ func main() {
 			go worker.Run(githubCtx)
 			log.Printf("github outbound worker enabled (every %s)", cfg.GithubOutboundInterval)
 		}
+	}
+
+	// CSM-native SLA engine recompute worker: periodically recomputes every
+	// source='CSM' "sla" row's elaped percentage/breach status (migration
+	// 000088) — see service.SLAEngineRecomputeWorker's own doc comment.
+	// Gated on pool the same way the GitHub outbound worker above is:
+	// nowhere to read/write a clock at all with no database configured.
+	slaEngineCtx, stopSLAEngine := context.WithCancel(context.Background())
+	defer stopSLAEngine()
+	if pool != nil {
+		slaEngineWorker := service.NewSLAEngineRecomputeWorker(repository.NewSLAEngineRepository(pool), cfg.SLARecomputeInterval)
+		go slaEngineWorker.Run(slaEngineCtx)
+		log.Printf("sla engine recompute worker enabled (every %s)", cfg.SLARecomputeInterval)
 	}
 
 	// Change-request notices: a background poller over event_outbox, gated on
@@ -128,6 +141,35 @@ func main() {
 		}
 	}
 
+	// Cloud status: the record-triggered path. Started whenever the scope is
+	// configured, because it is only useful when there is a scope to decide
+	// against -- and harmless without one, since HandleOutages returns early.
+	//
+	// Not gated on the delivery side's CLOUD_STATUS_ENABLED: nothing leaves
+	// the estate until csm-scheduled-tasks posts it, and that is where the
+	// double-fire guard belongs.
+	//
+	// It IS gated on its own CLOUD_STATUS_DRAINER_ENABLED, off by default,
+	// because this drainer rewrites cloud_monitor.status -- a column
+	// csm-sync-service also writes while its one-time bulk migration is
+	// still running. Clearing CLOUD_STATUS_SERVICE_IDS would stop the
+	// drainer but take the sweep endpoint and the dashboard reads with it,
+	// so the write needs a switch that does not.
+	if cfg.CloudStatusDrainerEnabled && cfg.DataSource != config.DataSourceServiceNow &&
+		len(cfg.CloudStatusServiceIDs) > 0 {
+		cloudStatusCtx, stopCloudStatus := context.WithCancel(context.Background())
+		defer stopCloudStatus()
+		cloudStatusRepo := repository.NewCloudStatusRepository(pool)
+		cloudStatusDrainer := service.NewCloudStatusDrainer(
+			cloudStatusRepo,
+			service.NewCloudStatusService(cloudStatusRepo, cfg.CloudStatusServiceIDs),
+			cfg.CloudStatusPollInterval,
+		)
+		go cloudStatusDrainer.Run(cloudStatusCtx)
+		log.Printf("cloud status notices enabled: draining every %s across %d services",
+			cfg.CloudStatusPollInterval, len(cfg.CloudStatusServiceIDs))
+	}
+
 	// The health probe listens separately, on its own port, so that only its
 	// own route is reachable at the public visibility it is published with —
 	// see server.NewHealthServer and .choreo/component.yaml.
@@ -167,14 +209,15 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("graceful shutdown failed: %v", err)
 	}
-	if eventPublisher != nil {
-		eventPublisher.Close()
-	}
+	// Closes both of the router's producers -- the shared event topic and
+	// the onboarding one.
+	closePublishers()
 	// Stop the drainer before closing its producer, so a notice in flight is
 	// not handed a writer that has already gone away.
 	stopCRNotices()
 	if crPublisher != nil {
 		crPublisher.Close()
 	}
+	stopSLAEngine()
 	log.Println("server stopped")
 }

@@ -14,11 +14,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import {
+  AdapterDateFns,
   Box,
   Button,
   Checkbox,
+  Chip,
+  CircularProgress,
+  DatePickers,
   Dialog,
   DialogActions,
   DialogContent,
@@ -32,8 +36,17 @@ import {
 } from "@wso2/oxygen-ui";
 import { RefreshCw, X } from "@wso2/oxygen-ui-icons-react";
 import { Link } from "react-router";
+import { useIdTokenClaims } from "@hooks/useIdTokenClaims";
+import { usePortalAccess } from "@context/current-user/usePortalAccess";
 import EditorWithSourceToggle from "@components/rich-text-editor/EditorWithSourceToggle";
-import { formatAbsoluteForUser } from "@utils/dateTime";
+import {
+  formatAbsoluteForUser,
+  formatDateTimeLocal,
+  isPastDateTime,
+  parseDateTimeLocal,
+  resolveDisplayTimeZone,
+  zonedInputToUtcIso,
+} from "@utils/dateTime";
 import { sanitizeRichTextHtml } from "@utils/sanitizeHtml";
 import {
   DRY_RUN_TAG_LABEL,
@@ -44,15 +57,35 @@ import { useUpdateAnnouncementRequest } from "@features/csm-announcements/api/us
 import { useRecordAnnouncementRequestDryRun } from "@features/csm-announcements/api/useRecordAnnouncementRequestDryRun";
 import { useSubmitAnnouncementRequest } from "@features/csm-announcements/api/useSubmitAnnouncementRequest";
 import { useApproveAnnouncementRequest } from "@features/csm-announcements/api/useApproveAnnouncementRequest";
+import { useScheduleAnnouncementRequest } from "@features/csm-announcements/api/useScheduleAnnouncementRequest";
 import { usePublishAnnouncementRequest } from "@features/csm-announcements/api/usePublishAnnouncementRequest";
 import { SECURITY_ANNOUNCEMENT_TAG_LABEL } from "@features/csm-announcements/components/CreateCustomerAnnouncementForm";
 import AnnouncementSendProgress, {
   type AnnouncementSendProgressState,
 } from "@features/csm-announcements/components/AnnouncementSendProgress";
+import PublishConfirmationDialog from "@features/csm-announcements/components/PublishConfirmationDialog";
+import { useResolvedAudiencePreview } from "@features/csm-announcements/api/useResolvedAudiencePreview";
+import AddUpdateConfirmationDialog from "@features/csm-announcements/components/AddUpdateConfirmationDialog";
+import { useCreateAnnouncementRequestUpdate } from "@features/csm-announcements/api/useCreateAnnouncementRequestUpdate";
+import { useListAnnouncementRequestUpdates } from "@features/csm-announcements/api/useListAnnouncementRequestUpdates";
+import { usePostAnnouncementUpdateComments } from "@features/csm-announcements/api/usePostAnnouncementUpdateComments";
+import type { AnnouncementRegistryCaseMember } from "@features/csm-announcements/types/announcementRegistry";
+
+const { DateTimePicker, LocalizationProvider } = DatePickers;
 
 interface AnnouncementRequestDialogProps {
   requestId: string;
   onClose: () => void;
+  /**
+   * Every member case this request published — only known when this dialog
+   * was opened from a batch row in the Announcements tab's registry list
+   * (the one place this data exists; see AnnouncementRegistryRow's own doc
+   * comment). Opened from the Pending tab instead, this is empty, and the
+   * "Delivered to" section below simply doesn't render — same graceful
+   * "nothing to show" behavior as a legacy published request with no
+   * publishedCaseIds at all.
+   */
+  caseMembers?: AnnouncementRegistryCaseMember[];
 }
 
 const STATE_TITLE: Record<string, string> = {
@@ -111,13 +144,187 @@ function isEmptyHtml(html: string): boolean {
 export default function AnnouncementRequestDialog({
   requestId,
   onClose,
+  caseMembers = [],
 }: AnnouncementRequestDialogProps): JSX.Element {
+  const { canWrite } = usePortalAccess();
   const { data: request, isLoading, isError, refetch } = useGetAnnouncementRequest(requestId);
   const update = useUpdateAnnouncementRequest();
   const recordDryRun = useRecordAnnouncementRequestDryRun();
   const submit = useSubmitAnnouncementRequest();
   const approve = useApproveAnnouncementRequest();
   const publish = usePublishAnnouncementRequest(request);
+  // Publish is restricted to the request's own creator server-side (an
+  // approver's job is only to approve, not to also trigger the real send) —
+  // this mirrors that here so the button reflects reality instead of
+  // failing with a 403 only after being clicked. claims.userid is the same
+  // stable per-account identifier the backend's JWT "userid" claim (and so
+  // request.createdBy) is sourced from — see IdTokenClaims's own doc
+  // comment for why not `sub`, which is per-session.
+  const claims = useIdTokenClaims();
+  // useIdTokenClaims briefly returns undefined while it decodes the token
+  // asynchronously after mount, even for an already-signed-in user (this
+  // dialog is only ever reached signed-in, behind AuthGuard) — without
+  // distinguishing that from "loaded, and it's someone else," the Publish
+  // button would flash disabled with an incorrect "only X can publish" for
+  // the real creator on every open, until the token finishes decoding.
+  const claimsReady = claims !== undefined;
+  const isRequestCreator = !!request && !!claims?.userid && claims.userid === request.createdBy;
+  const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
+  const [confirmGiveUpOpen, setConfirmGiveUpOpen] = useState(false);
+  const [givingUp, setGivingUp] = useState(false);
+
+  // Resolves failedProjectIds to their real short keys (e.g. "CUPPTSUB") for
+  // the send-progress card's chips below — those ids come straight off the
+  // frozen resolvedProjectIds snapshot, which carries no key/name data of
+  // its own. Re-resolves whenever the failed set actually changes (a retry
+  // narrowing it, a fresh failure widening it), not on every render.
+  const failedProjectsPreview = useResolvedAudiencePreview();
+  const failedProjectIdsKey = publish.failedProjectIds.join(",");
+  useEffect(() => {
+    if (publish.failedProjectIds.length > 0) {
+      void failedProjectsPreview.resolve(publish.failedProjectIds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [failedProjectIdsKey]);
+  const failedProjectLabel = (projectId: string): string =>
+    failedProjectsPreview.projects.find((p) => p.id === projectId)?.key ?? projectId;
+
+  // Caps how many audience projects get resolved and shown as chips below,
+  // by default. A large "All customer projects" send can resolve into well
+  // over a thousand ids, and dumping all of them into one review box is
+  // unreadable regardless of whether each one shows a real key or a raw id.
+  // showFullAudience is an explicit opt-in (a "Show all" click, never
+  // automatic) past this default -- an approver reviewing a large send has
+  // no way to inspect who's actually in it beyond the default cap
+  // otherwise, even though Publish still targets the complete frozen
+  // audience regardless of what this box displays.
+  const AUDIENCE_DISPLAY_CAP = 100;
+  const [showFullAudience, setShowFullAudience] = useState(false);
+  // Reset showFullAudience *during render* when request?.id changes, not in
+  // a useEffect -- an effect-based reset still commits one render late: the
+  // very first render for a new request would compute
+  // visibleAudienceProjectIds from the *previous* request's leftover
+  // showFullAudience=true before the reset effect gets a chance to run,
+  // potentially kicking off a full-audience resolve for the wrong request.
+  // This is React's own documented pattern for adjusting state in response
+  // to a prop change without an effect (bail out and re-render immediately,
+  // never committing the stale value).
+  const [showFullAudienceForRequestId, setShowFullAudienceForRequestId] = useState(request?.id);
+  if (showFullAudienceForRequestId !== request?.id) {
+    setShowFullAudienceForRequestId(request?.id);
+    setShowFullAudience(false);
+  }
+  const visibleAudienceProjectIds = showFullAudience
+    ? (request?.resolvedProjectIds ?? [])
+    : (request?.resolvedProjectIds?.slice(0, AUDIENCE_DISPLAY_CAP) ?? []);
+  const hiddenAudienceProjectCount = Math.max(
+    (request?.resolvedProjectIds?.length ?? 0) - visibleAudienceProjectIds.length,
+    0,
+  );
+
+  // Resolves the visible slice above to real short keys -- otherwise shown
+  // as raw, meaningless UUIDs to whoever's reviewing/approving the request.
+  // Same resolve-on-change pattern as failedProjectsPreview above; any id
+  // that fails to resolve (a fetch error) just falls back to its raw id
+  // rather than blocking the rest of the list. maxProjects is passed
+  // explicitly as however many are actually visible right now (100, or
+  // every one of them once showFullAudience is set) -- resolving anything
+  // beyond what's displayed would just be wasted round trips.
+  //
+  // Only skips resolving when collapsing back within the *same* request
+  // (fewer ids than what's already been resolved for it) -- switching to a
+  // different request always resolves fresh, even if it happens to have the
+  // same resolved-project count as the last one (comparing count alone,
+  // ignoring which request it belongs to, would wrongly keep showing the
+  // previous request's resolved keys). Collapsing via "Show fewer" skips
+  // re-resolving because every id it still shows was already fetched as
+  // part of the larger set -- audiencePreview.resolve replaces its result
+  // wholesale rather than remembering earlier calls, so without this guard
+  // "Show fewer" would re-fetch the first 100 projects from scratch,
+  // flashing back to "Resolving project names…" for data already in hand.
+  const audiencePreview = useResolvedAudiencePreview();
+  const visibleAudienceProjectIdsKey = visibleAudienceProjectIds.join(",");
+  const lastAudienceResolve = useRef<{ requestId: string | undefined; count: number }>({
+    requestId: undefined,
+    count: 0,
+  });
+  useEffect(() => {
+    const isSameRequest = lastAudienceResolve.current.requestId === request?.id;
+    const needsResolve =
+      visibleAudienceProjectIds.length > 0 &&
+      (!isSameRequest || visibleAudienceProjectIds.length > lastAudienceResolve.current.count);
+    if (needsResolve) {
+      lastAudienceResolve.current = { requestId: request?.id, count: visibleAudienceProjectIds.length };
+      void audiencePreview.resolve(visibleAudienceProjectIds, visibleAudienceProjectIds.length);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleAudienceProjectIdsKey, request?.id]);
+  const audienceProjectLabel = (projectId: string): string =>
+    audiencePreview.projects.find((p) => p.id === projectId)?.key ?? projectId;
+
+  // Schedule: an alternative to clicking Publish immediately — pick a
+  // future date/time and operations/csm-scheduled-tasks' own sub-cron
+  // publishes automatically once it arrives. Purely additive: Publish
+  // itself (above) keeps every one of its own guards unchanged and still
+  // works at any time, schedule pending or not, as an explicit override.
+  const schedule = useScheduleAnnouncementRequest();
+  const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
+  const [scheduleInput, setScheduleInput] = useState("");
+  const scheduleTimeZone = resolveDisplayTimeZone();
+  const scheduleInputDate = parseDateTimeLocal(scheduleInput);
+  const scheduleInputIsPast = isPastDateTime(scheduleInputDate);
+
+  // Add-update: composing and posting a follow-up comment to every case a
+  // published request created. Restricted to the creator, same as Publish
+  // and for the same reason.
+  const createUpdate = useCreateAnnouncementRequestUpdate();
+  const postUpdateComments = usePostAnnouncementUpdateComments();
+  const updatesQuery = useListAnnouncementRequestUpdates(request?.id, request?.state === "published");
+  const [updateContent, setUpdateContent] = useState("");
+  const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
+  // Set once createUpdate has recorded the current updateContent, so a
+  // retry after a partial comment-fan-out failure only retries the
+  // outstanding comments (postUpdateComments already tracks that itself)
+  // without creating a second, duplicate AnnouncementRequestUpdate row for
+  // the same text. This is plain component state, not persisted anywhere —
+  // closing and reopening this dialog mid-retry loses it, the same
+  // accepted trade-off usePublishAnnouncementRequest's own doc comment
+  // already documents for Publish ("if the dialog is closed mid-retry,
+  // progress made so far is lost"). A closed-then-reopened retry here
+  // would re-record a second AnnouncementRequestUpdate row for the same
+  // text rather than resuming the first one — a duplicate history entry
+  // (visible in "Past updates", not silent data loss), not a persistence
+  // layer this slice builds for.
+  const [recordedUpdateContent, setRecordedUpdateContent] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (postUpdateComments.done && recordedUpdateContent !== null) {
+      setUpdateContent("");
+      setRecordedUpdateContent(null);
+    }
+    // Only reacts to the fan-out actually finishing, not every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postUpdateComments.done]);
+
+  const handleConfirmUpdate = async (): Promise<void> => {
+    if (!request) return;
+    setConfirmUpdateOpen(false);
+    if (recordedUpdateContent === null) {
+      // A genuinely new update, not a retry of one already recorded —
+      // postUpdateComments' own per-case tracking must be cleared first, or
+      // it would see every case already "succeeded" from whichever earlier
+      // update this same dialog instance already posted and silently skip
+      // this one's fan-out entirely (see that hook's own reset() doc comment).
+      postUpdateComments.reset();
+      try {
+        await createUpdate.mutateAsync({ id: request.id, payload: { content: updateContent } });
+        setRecordedUpdateContent(updateContent);
+      } catch {
+        return;
+      }
+    }
+    await postUpdateComments.handlePost(request.publishedCaseIds ?? [], updateContent, request.createdBy);
+  };
 
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -352,7 +559,12 @@ export default function AnnouncementRequestDialog({
                     variant="outlined"
                     size="small"
                     onClick={handleSaveContent}
-                    disabled={update.isPending || subject.trim().length === 0 || contentLockedForRetry}
+                    disabled={
+                      update.isPending ||
+                      subject.trim().length === 0 ||
+                      contentLockedForRetry ||
+                      !canWrite
+                    }
                   >
                     {update.isPending ? "Saving…" : "Save changes"}
                   </Button>
@@ -365,9 +577,14 @@ export default function AnnouncementRequestDialog({
               </>
             ) : (
               <>
-                <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                  {request.subject || "(no subject)"}
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                    {request.subject || "(no subject)"}
+                  </Typography>
+                  {request.isSecurityAnnouncement && (
+                    <Chip size="small" color="warning" label="Security" sx={{ flexShrink: 0 }} />
+                  )}
+                </Box>
                 <Box
                   sx={{ fontSize: "0.875rem", lineHeight: 1.5, wordBreak: "break-word" }}
                   dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(request.description) }}
@@ -398,43 +615,85 @@ export default function AnnouncementRequestDialog({
                 </Typography>
               </DetailField>
               <DetailField label="Created">
-                <Typography variant="body2">{whoWhen(request.createdBy, request.createdAt)}</Typography>
+                <Typography variant="body2">
+                  {whoWhen(request.createdByEmail ?? request.createdBy, request.createdAt)}
+                </Typography>
               </DetailField>
               {request.submittedAt && (
                 <DetailField label="Submitted">
-                  <Typography variant="body2">{whoWhen(request.submittedBy, request.submittedAt)}</Typography>
+                  <Typography variant="body2">
+                    {whoWhen(request.submittedByEmail ?? request.submittedBy, request.submittedAt)}
+                  </Typography>
                 </DetailField>
               )}
               {request.approvedAt && (
                 <DetailField label="Approved">
-                  <Typography variant="body2">{whoWhen(request.approvedBy, request.approvedAt)}</Typography>
+                  <Typography variant="body2">
+                    {whoWhen(request.approvedByEmail ?? request.approvedBy, request.approvedAt)}
+                  </Typography>
                 </DetailField>
               )}
               {request.publishedAt && (
                 <DetailField label="Published">
-                  <Typography variant="body2">{whoWhen(request.publishedBy, request.publishedAt)}</Typography>
+                  <Typography variant="body2">
+                    {whoWhen(request.publishedByEmail ?? request.publishedBy, request.publishedAt)}
+                  </Typography>
                 </DetailField>
               )}
             </Box>
 
             {request.resolvedProjectIds && request.resolvedProjectIds.length > 0 && (
               <Box
+                role="group"
+                aria-label="Audience projects"
                 sx={{
                   border: 1,
                   borderColor: "divider",
                   borderRadius: 1,
-                  maxHeight: 120,
+                  maxHeight: 220,
                   overflowY: "auto",
-                  p: 1,
+                  p: 1.5,
                 }}
               >
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
-                >
-                  {request.resolvedProjectIds.join(", ")}
-                </Typography>
+                {audiencePreview.isLoading ? (
+                  <Box role="status" aria-live="polite" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <CircularProgress size={14} />
+                    <Typography variant="body2" color="text.secondary">
+                      {showFullAudience
+                        ? `Resolving all ${visibleAudienceProjectIds.length} projects — this can take a moment for a large audience…`
+                        : "Resolving project names…"}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                    {visibleAudienceProjectIds.map((projectId) => (
+                      <Chip
+                        key={projectId}
+                        label={audienceProjectLabel(projectId)}
+                        size="small"
+                        variant="outlined"
+                      />
+                    ))}
+                    {hiddenAudienceProjectCount > 0 && (
+                      <Chip
+                        label={`Show all (+${hiddenAudienceProjectCount} more)`}
+                        size="small"
+                        variant="outlined"
+                        color="default"
+                        onClick={() => setShowFullAudience(true)}
+                      />
+                    )}
+                    {showFullAudience && visibleAudienceProjectIds.length > AUDIENCE_DISPLAY_CAP && (
+                      <Chip
+                        label="Show fewer"
+                        size="small"
+                        variant="outlined"
+                        color="default"
+                        onClick={() => setShowFullAudience(false)}
+                      />
+                    )}
+                  </Box>
+                )}
               </Box>
             )}
 
@@ -444,11 +703,16 @@ export default function AnnouncementRequestDialog({
                   variant="contained"
                   size="small"
                   onClick={() => approve.mutate({ id: request.id })}
-                  disabled={approve.isPending}
+                  disabled={approve.isPending || !canWrite}
                 >
                   {approve.isPending ? "Approving…" : "Mark as approved"}
                 </Button>
-                <Button variant="text" size="small" onClick={() => setConfirmEditOpen(true)}>
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() => setConfirmEditOpen(true)}
+                  disabled={!canWrite}
+                >
                   Edit
                 </Button>
                 {approve.isError && (
@@ -470,7 +734,8 @@ export default function AnnouncementRequestDialog({
                     submittingForApproval ||
                     hasUnsavedChanges ||
                     subject.trim().length === 0 ||
-                    isEmptyHtml(description)
+                    isEmptyHtml(description) ||
+                    !canWrite
                   }
                 >
                   {dryRun.runningDryRun
@@ -503,32 +768,320 @@ export default function AnnouncementRequestDialog({
                     variant="contained"
                     color="primary"
                     size="small"
-                    onClick={() => !hasUnsavedChanges && void publish.handlePublish()}
-                    disabled={publish.publishing || hasUnsavedChanges}
+                    onClick={() =>
+                      !hasUnsavedChanges &&
+                      claimsReady &&
+                      isRequestCreator &&
+                      publish.readyToPublish &&
+                      setConfirmPublishOpen(true)
+                    }
+                    disabled={
+                      publish.publishing ||
+                      hasUnsavedChanges ||
+                      !claimsReady ||
+                      !isRequestCreator ||
+                      !publish.readyToPublish ||
+                      !canWrite
+                    }
                   >
-                    {publish.publishing
-                      ? "Publishing…"
-                      : publish.failedProjectIds.length > 0
-                        ? "Retry failed projects"
-                        : publish.failedTagProjectIds.length > 0
-                          ? "Retry security label"
-                          : "Publish"}
+                    {!claimsReady
+                      ? "Publish"
+                      : publish.publishing
+                        ? "Publishing…"
+                        : publish.failedProjectIds.length > 0
+                          ? "Retry failed projects"
+                          : publish.failedTagProjectIds.length > 0
+                            ? "Retry security label"
+                            : "Publish"}
                   </Button>
+                  {claimsReady &&
+                    isRequestCreator &&
+                    publish.readyToPublish &&
+                    !publish.publishing &&
+                    publish.failedProjectIds.length > 0 &&
+                    publish.failedTagProjectIds.length === 0 &&
+                    publish.succeededProjectIds.length > 0 && (
+                      <Button
+                        variant="outlined"
+                        color="warning"
+                        size="small"
+                        disabled={hasUnsavedChanges || !canWrite}
+                        onClick={() => setConfirmGiveUpOpen(true)}
+                      >
+                        Publish anyway
+                      </Button>
+                    )}
                 </Box>
-                {hasUnsavedChanges && (
+                {claimsReady && !isRequestCreator && (
+                  <Typography variant="caption" color="text.secondary">
+                    Only {request.createdByEmail ?? request.createdBy} can publish this request — approving it
+                    doesn't grant that.
+                  </Typography>
+                )}
+                {claimsReady && isRequestCreator && hasUnsavedChanges && (
                   <Typography variant="caption" color="text.secondary">
                     Save your changes first — Publish sends whatever's currently saved, not what's still
                     unsaved here.
                   </Typography>
                 )}
+                {claimsReady && isRequestCreator && !hasUnsavedChanges && publish.hydratingDeliveries && (
+                  <Typography variant="caption" color="text.secondary">
+                    Loading previous progress…
+                  </Typography>
+                )}
+                {claimsReady && isRequestCreator && !hasUnsavedChanges && publish.hydrationFailed && (
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <Typography variant="caption" color="error">
+                      Couldn't load previous progress for this request — Publish is blocked until this
+                      loads, so an already-sent project isn't sent a duplicate case.
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<RefreshCw size={14} />}
+                      onClick={publish.retryHydration}
+                    >
+                      Retry
+                    </Button>
+                  </Box>
+                )}
                 {(publish.publishing || priorSucceededCount > 0 || publish.failedProjectIds.length > 0) && (
-                  <AnnouncementSendProgress progress={sendProgress} />
+                  <AnnouncementSendProgress
+                    progress={sendProgress}
+                    // Once there's an outstanding failure, the succeeded
+                    // count is either stale history (reopening a request
+                    // with prior progress) or already visible via the
+                    // "Retry failed projects" flow itself — only the
+                    // currently-failing projects need attention. A fully
+                    // successful send (no failures at all) still shows the
+                    // reassuring full tally.
+                    hideSucceededTally={publish.failedProjectIds.length > 0}
+                    projectLabel={failedProjectLabel}
+                  />
                 )}
                 {publish.failedTagProjectIds.length > 0 && (
                   <Typography variant="caption" color="warning.main">
                     Security label couldn't be attached for: {publish.failedTagProjectIds.join(", ")} —
                     retry before this can be published.
                   </Typography>
+                )}
+
+                <Divider />
+
+                {request.dueOn && (
+                  <Typography variant="caption" color="text.secondary">
+                    Due {formatAbsoluteForUser(request.dueOn)}
+                  </Typography>
+                )}
+
+                {request.scheduledFor ? (
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                    <Typography variant="body2">
+                      Scheduled to publish on {formatAbsoluteForUser(request.scheduledFor)}
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="text"
+                      color="error"
+                      disabled={schedule.isPending || !canWrite || !isRequestCreator}
+                      onClick={() => schedule.mutate({ id: request.id, scheduledFor: null })}
+                    >
+                      Cancel schedule
+                    </Button>
+                  </Box>
+                ) : (
+                  isRequestCreator &&
+                  canWrite &&
+                  (schedulePickerOpen ? (
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                      <LocalizationProvider dateAdapter={AdapterDateFns}>
+                        <DateTimePicker
+                          label={`Publish at (${scheduleTimeZone})`}
+                          value={scheduleInputDate}
+                          onChange={(next) =>
+                            setScheduleInput(next instanceof Date && !Number.isNaN(next.getTime()) ? formatDateTimeLocal(next) : "")
+                          }
+                          disabled={schedule.isPending}
+                          slotProps={{
+                            textField: {
+                              fullWidth: true,
+                              size: "small",
+                              error: !!scheduleInput && scheduleInputIsPast,
+                              helperText: scheduleInputIsPast
+                                ? "Must be in the future."
+                                : `Entered in your timezone (${scheduleTimeZone}); stored as UTC.`,
+                            },
+                          }}
+                        />
+                      </LocalizationProvider>
+                      <Box sx={{ display: "flex", gap: 1 }}>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          disabled={!scheduleInput || scheduleInputIsPast || schedule.isPending}
+                          onClick={() => {
+                            const iso = zonedInputToUtcIso(scheduleInput, scheduleTimeZone);
+                            if (!iso) return;
+                            schedule.mutate(
+                              { id: request.id, scheduledFor: iso },
+                              { onSuccess: () => setSchedulePickerOpen(false) },
+                            );
+                          }}
+                        >
+                          {schedule.isPending ? "Scheduling…" : "Confirm schedule"}
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="text"
+                          disabled={schedule.isPending}
+                          onClick={() => {
+                            setSchedulePickerOpen(false);
+                            setScheduleInput("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </Box>
+                      {schedule.isError && (
+                        <Typography variant="caption" color="error">
+                          {schedule.error instanceof Error ? schedule.error.message : "Could not set the schedule."}
+                        </Typography>
+                      )}
+                    </Box>
+                  ) : (
+                    <Box>
+                      <Button size="small" variant="outlined" onClick={() => setSchedulePickerOpen(true)}>
+                        Schedule for later…
+                      </Button>
+                    </Box>
+                  ))
+                )}
+              </Box>
+            )}
+
+            {request.state === "published" && caseMembers.length > 0 && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                <Divider />
+                <Typography variant="subtitle2">
+                  Delivered to {caseMembers.length} project{caseMembers.length === 1 ? "" : "s"}
+                </Typography>
+                {/* A real send can reach ~100 projects, so this is a dense,
+                    scrollable list rather than one card per case (the shape
+                    "Past updates" below uses, fine there since those are
+                    rare and rich-text) — bounded height keeps the dialog
+                    itself from growing without limit alongside the list. */}
+                <Box
+                  sx={{
+                    maxHeight: 220,
+                    overflowY: "auto",
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: 1,
+                  }}
+                >
+                  {caseMembers.map((m) => (
+                    <Box
+                      key={m.caseId}
+                      component={Link}
+                      to={`/announcements/${m.caseId}`}
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 1,
+                        px: 1.5,
+                        py: 0.75,
+                        textDecoration: "none",
+                        color: "inherit",
+                        borderBottom: 1,
+                        borderColor: "divider",
+                        "&:last-of-type": { borderBottom: 0 },
+                        "&:hover": { bgcolor: "action.hover" },
+                      }}
+                    >
+                      <Typography variant="body2" noWrap>
+                        {m.projectName || "—"}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>
+                        {m.caseNumber || m.wso2CaseId || "—"}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {request.state === "published" && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                <Divider />
+                <Typography variant="subtitle2">Post an update</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Appends a dated follow-up as a real comment on every case this announcement created —
+                  not a replacement for the original content.
+                </Typography>
+
+                {claimsReady && !isRequestCreator && (
+                  <Typography variant="caption" color="text.secondary">
+                    Only {request.createdByEmail ?? request.createdBy} can post an update to this request.
+                  </Typography>
+                )}
+                {claimsReady && isRequestCreator && (request.publishedCaseIds ?? []).length === 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    This request was published before case tracking existed — there's nothing to post an
+                    update to.
+                  </Typography>
+                )}
+                {(!claimsReady ||
+                  (isRequestCreator && (request.publishedCaseIds ?? []).length > 0)) && (
+                  <>
+                    <EditorWithSourceToggle value={updateContent} onChange={setUpdateContent} />
+                    <Box>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        disabled={
+                          !claimsReady ||
+                          !isRequestCreator ||
+                          updateContent.trim().length === 0 ||
+                          createUpdate.isPending ||
+                          postUpdateComments.posting ||
+                          (request.publishedCaseIds ?? []).length === 0 ||
+                          !canWrite
+                        }
+                        onClick={() => setConfirmUpdateOpen(true)}
+                      >
+                        {createUpdate.isPending || postUpdateComments.posting ? "Posting…" : "Post update"}
+                      </Button>
+                    </Box>
+                    {createUpdate.isError && (
+                      <Typography variant="caption" color="error">
+                        Could not record the update. Try again.
+                      </Typography>
+                    )}
+                    {postUpdateComments.failedCaseIds.length > 0 && (
+                      <Typography variant="caption" color="warning.main">
+                        Couldn&apos;t post to {postUpdateComments.failedCaseIds.length} case
+                        {postUpdateComments.failedCaseIds.length === 1 ? "" : "s"} — retry to resend just
+                        those.
+                      </Typography>
+                    )}
+                  </>
+                )}
+
+                {updatesQuery.data && updatesQuery.data.updates.length > 0 && (
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: 1, mt: 1 }}>
+                    <Typography variant="subtitle2">Past updates</Typography>
+                    {updatesQuery.data.updates.map((u) => (
+                      <Box key={u.id} sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.5 }}>
+                        <Typography variant="caption" color="text.secondary">
+                          {whoWhen(u.createdByEmail ?? u.createdBy, u.createdOn)}
+                        </Typography>
+                        <Box
+                          sx={{ fontSize: "0.875rem", lineHeight: 1.5, wordBreak: "break-word", mt: 0.5 }}
+                          dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(u.content) }}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
                 )}
               </Box>
             )}
@@ -563,6 +1116,73 @@ export default function AnnouncementRequestDialog({
             </Button>
           </DialogActions>
         </Dialog>
+      )}
+
+      {request && (
+        <PublishConfirmationDialog
+          open={confirmPublishOpen}
+          request={request}
+          isRetry={publish.failedProjectIds.length > 0 || publish.failedTagProjectIds.length > 0}
+          confirming={publish.publishing}
+          onCancel={() => setConfirmPublishOpen(false)}
+          onConfirm={() => {
+            setConfirmPublishOpen(false);
+            void publish.handlePublish();
+          }}
+        />
+      )}
+
+      {request && (
+        <Dialog open={confirmGiveUpOpen} onClose={givingUp ? undefined : () => setConfirmGiveUpOpen(false)} maxWidth="sm" fullWidth>
+          <DialogTitle>Publish without the failed projects?</DialogTitle>
+          <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+            <Typography variant="body2">
+              This marks the request published using only the {publish.succeededProjectIds.length} project
+              {publish.succeededProjectIds.length === 1 ? "" : "s"} that already received a case. The
+              following {publish.failedProjectIds.length === 1 ? "project" : "projects"} will be permanently
+              skipped — there's no way to send this announcement to {publish.failedProjectIds.length === 1 ? "it" : "them"} afterward:
+            </Typography>
+            <Typography variant="body2" fontWeight={600} color="error.main">
+              {publish.failedProjectIds.map(failedProjectLabel).join(", ")}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Only use this once you've confirmed the retry genuinely can't succeed — a project that's just
+              slow or transiently failing should be retried instead.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmGiveUpOpen(false)} disabled={givingUp}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              disabled={givingUp}
+              onClick={async () => {
+                setGivingUp(true);
+                try {
+                  await publish.publishGivingUpOnFailed();
+                } finally {
+                  setGivingUp(false);
+                  setConfirmGiveUpOpen(false);
+                }
+              }}
+            >
+              {givingUp ? "Publishing…" : "Publish anyway"}
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+
+      {request && (
+        <AddUpdateConfirmationDialog
+          open={confirmUpdateOpen}
+          content={updateContent}
+          caseCount={(request.publishedCaseIds ?? []).length}
+          confirming={createUpdate.isPending || postUpdateComments.posting}
+          onCancel={() => setConfirmUpdateOpen(false)}
+          onConfirm={() => void handleConfirmUpdate()}
+        />
       )}
     </Dialog>
   );

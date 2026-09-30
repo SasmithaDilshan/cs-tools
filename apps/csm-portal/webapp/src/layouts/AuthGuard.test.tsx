@@ -84,18 +84,24 @@ vi.mock("@layouts/BareAuthLoader", () => ({
 }));
 
 // Mutable so individual tests can simulate a /users/me outcome. Defaults to
-// "loaded fine, no error" — the common case for every pre-existing test in
-// this file, which don't care about CurrentUserContext at all.
-const currentUserState: { isLoading: boolean; isError: boolean; error: Error | null } = {
+// "loaded fine, no error, no user" — the common case for every pre-existing
+// test in this file, which don't care about CurrentUserContext at all.
+const currentUserState: {
+  isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
+  user: { roles: string[] } | undefined;
+} = {
   isLoading: false,
   isError: false,
   error: null,
+  user: undefined,
 };
 
 vi.mock("@context/current-user/CurrentUserContext", () => ({
   CurrentUserProvider: ({ children }: { children: React.ReactNode }) => children,
   useCurrentUser: () => ({
-    user: undefined,
+    user: currentUserState.user,
     isLoading: currentUserState.isLoading,
     isError: currentUserState.isError,
     error: currentUserState.error,
@@ -125,6 +131,7 @@ describe("AuthGuard sign-in fallback (before any successful sign-in)", () => {
     currentUserState.isLoading = false;
     currentUserState.isError = false;
     currentUserState.error = null;
+    currentUserState.user = undefined;
     signInMock.mockResolvedValue(undefined);
   });
 
@@ -185,6 +192,7 @@ describe("AuthGuard after an initial successful sign-in (transient token-clock e
     currentUserState.isLoading = false;
     currentUserState.isError = false;
     currentUserState.error = null;
+    currentUserState.user = undefined;
   });
 
   it("stops rendering ProtectedRoute (and therefore its loader-swap) once signed in, and never re-enters it for a later transient clock expiry", async () => {
@@ -274,6 +282,72 @@ describe("AuthGuard's response to a /users/me failure once signed in", () => {
     currentUserState.isLoading = false;
     currentUserState.isError = false;
     currentUserState.error = null;
+    currentUserState.user = undefined;
+  });
+
+  it("shows the not-authorized page for a signed-in user holding no portal role at all", async () => {
+    currentUserState.user = { roles: [] };
+    let rerender!: ReturnType<typeof renderAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/some/protected/path"]}>
+          <AuthGuard />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      screen.getByText("You don't have access to this portal yet"),
+    ).toBeInTheDocument();
+  });
+
+  // The Sales/SA (SPL) audience gate checks plain "viewer", not
+  // "sales_solutions" (see usePortalView.ts's own doc comment) -- "viewer"
+  // is already one of getPortalAccess's 8 checked roles, so a Sales/SA
+  // user holding it passes with no special case needed, and a
+  // sales_solutions-only user (holding neither) has nowhere left to land.
+  it("does NOT show the not-authorized page for a viewer-only user — they're headed for the Sales/SA nav", async () => {
+    currentUserState.user = { roles: ["viewer"] };
+    let rerender!: ReturnType<typeof renderAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/some/protected/path"]}>
+          <AuthGuard />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      screen.queryByText("You don't have access to this portal yet"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the not-authorized page for a sales_solutions-only user — without viewer they can't reach SPL either", async () => {
+    currentUserState.user = { roles: ["sales_solutions"] };
+    let rerender!: ReturnType<typeof renderAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/some/protected/path"]}>
+          <AuthGuard />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      screen.getByText("You don't have access to this portal yet"),
+    ).toBeInTheDocument();
   });
 
   it("shows the not-authorized page when /users/me fails with 401 (a token useAuthApiClient's own recovery chain could not fix)", async () => {
@@ -392,6 +466,7 @@ describe("AuthGuard's AppLayout showCaseTabs wiring while auth itself hasn't res
     currentUserState.isLoading = false;
     currentUserState.isError = false;
     currentUserState.error = null;
+    currentUserState.user = undefined;
     signInMock.mockResolvedValue(undefined);
   });
 
@@ -418,6 +493,7 @@ describe("AuthGuard bare mode", () => {
     currentUserState.isLoading = false;
     currentUserState.isError = false;
     currentUserState.error = null;
+    currentUserState.user = undefined;
     signInMock.mockResolvedValue(undefined);
   });
 
@@ -477,6 +553,103 @@ describe("AuthGuard bare mode", () => {
     });
 
     expect(screen.getByTestId("bare-route-content")).toBeInTheDocument();
+    expect(screen.queryByTestId("app-layout")).not.toBeInTheDocument();
+  });
+
+  // Regression test (CodeRabbit security finding, CWE-862): bare mode must
+  // not render the real <Outlet /> — and let its widgets start firing
+  // their own authenticated queries — before /users/me has confirmed this
+  // caller is actually entitled to the portal, not just signed in to
+  // Asgardeo. Same gate AuthorizedAppShell already applies to every other
+  // route, rendered here without any AppLayout chrome.
+  it("shows BareAuthLoader (not the routed page) while /users/me is still resolving, even after Asgardeo sign-in", async () => {
+    asgardeoState.isSignedIn = true;
+    currentUserState.isLoading = true;
+    let rerender!: ReturnType<typeof renderBareAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderBareAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/cs-monitor-dashboard"]}>
+          <Routes>
+            <Route element={<AuthGuard bare />}>
+              <Route
+                path="cs-monitor-dashboard"
+                element={<div data-testid="bare-route-content" />}
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+
+    expect(screen.getByTestId("bare-auth-loader")).toBeInTheDocument();
+    expect(screen.queryByTestId("bare-route-content")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("app-layout")).not.toBeInTheDocument();
+  });
+
+  it("shows a chrome-free not-authorized page (not the routed page) when /users/me comes back 401, even after Asgardeo sign-in", async () => {
+    asgardeoState.isSignedIn = true;
+    currentUserState.isError = true;
+    currentUserState.error = new ApiError(401, "Unauthorized");
+    let rerender!: ReturnType<typeof renderBareAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderBareAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/cs-monitor-dashboard"]}>
+          <Routes>
+            <Route element={<AuthGuard bare />}>
+              <Route
+                path="cs-monitor-dashboard"
+                element={<div data-testid="bare-route-content" />}
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+
+    expect(screen.getByText("You don't have access to this portal yet")).toBeInTheDocument();
+    expect(screen.queryByTestId("bare-route-content")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("app-layout")).not.toBeInTheDocument();
+  });
+
+  // Regression test (Rashmika review): an `/users/me` failure that ISN'T a
+  // confirmed 401/403 (a transient 5xx, a network blip) must not fall
+  // through to the routed outlet — entitlement is unknown, not confirmed,
+  // and this route has no one watching to notice or retry. Holds on
+  // BareAuthLoader instead, same as the still-loading state.
+  it("shows BareAuthLoader (not the routed page) when /users/me fails with a non-auth error, even after Asgardeo sign-in", async () => {
+    asgardeoState.isSignedIn = true;
+    currentUserState.isError = true;
+    currentUserState.error = new ApiError(500, "Internal Server Error");
+    let rerender!: ReturnType<typeof renderBareAuthGuard>["rerender"];
+
+    await act(async () => {
+      ({ rerender } = renderBareAuthGuard());
+    });
+    await act(async () => {
+      rerender(
+        <MemoryRouter initialEntries={["/cs-monitor-dashboard"]}>
+          <Routes>
+            <Route element={<AuthGuard bare />}>
+              <Route
+                path="cs-monitor-dashboard"
+                element={<div data-testid="bare-route-content" />}
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+
+    expect(screen.getByTestId("bare-auth-loader")).toBeInTheDocument();
+    expect(screen.queryByTestId("bare-route-content")).not.toBeInTheDocument();
     expect(screen.queryByTestId("app-layout")).not.toBeInTheDocument();
   });
 

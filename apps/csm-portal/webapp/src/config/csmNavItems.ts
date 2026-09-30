@@ -17,23 +17,30 @@
 import {
   AlertOctagon,
   AlertTriangle,
+  BarChart3,
   Briefcase,
   Bug,
   Building2,
+  CalendarClock,
+  CalendarDays,
   ChartColumn,
   Clock,
   ClipboardList,
   Cog,
   FileWarning,
+  FolderKanban,
   GitPullRequest,
   Headset,
+  HeartPulse,
   KeyRound,
+  Layers,
   LifeBuoy,
   Megaphone,
   RefreshCw,
   Settings,
   Shield,
   UserCog,
+  UserSearch,
   Users,
   UsersRound,
 } from "@wso2/oxygen-ui-icons-react";
@@ -46,6 +53,8 @@ import type { PortalAccess } from "@context/current-user/portalAccess";
  * feature flags; `featureFlags.ts` resolves a {@link CsmNavNode.id} to a
  * visibility state.
  */
+import { PLG_NAV_SECTION } from "@features/plg/config/plgNavItems";
+
 export interface CsmNavNode {
   /**
    * Stable, dotted identifier: `"operations"` for a section,
@@ -172,10 +181,17 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
     icon: Briefcase,
   },
   {
+    id: "announcements",
+    label: "Announcements",
+    href: "/announcements",
+    icon: Megaphone,
+  },
+  {
     id: "security-center",
     label: "Security Center",
     href: "/security-center",
     icon: Shield,
+    requires: "canUseSecurityCenter",
     children: [
       {
         id: "security-center.reports",
@@ -196,26 +212,6 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
     ],
   },
   {
-    id: "updates",
-    label: "Updates",
-    href: "/updates",
-    requires: "canUseTimeCardsAndUpdates",
-    icon: RefreshCw,
-  },
-  {
-    id: "time-cards",
-    label: "Time cards",
-    href: "/time-cards",
-    requires: "canUseTimeCardsAndUpdates",
-    icon: Clock,
-  },
-  {
-    id: "announcements",
-    label: "Announcements",
-    href: "/announcements",
-    icon: Megaphone,
-  },
-  {
     id: "customers",
     label: "Customers",
     href: "/customers",
@@ -232,6 +228,34 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
         href: "/customers/projects",
       },
     ],
+  },
+  // PLG Customer Success Portal. Declared in
+  // features/plg/config/plgNavItems so a change to PLG's pages does not
+  // touch this file. Hide the whole section with
+  // CSM_PORTAL_FEATURE_OVERRIDES: { "plg": "hidden" }.
+  PLG_NAV_SECTION,
+  {
+    id: "updates",
+    label: "Updates",
+    href: "/updates",
+    requires: "canUseTimeCardsAndUpdates",
+    icon: RefreshCw,
+  },
+  {
+    id: "time-cards",
+    label: "Time cards",
+    href: "/time-cards",
+    requires: "canUseTimeCardsAndUpdates",
+    icon: Clock,
+  },
+  {
+    id: "team-schedule",
+    label: "Team Schedule",
+    href: "/team-schedule",
+    // No `requires`: the rota is readable by everyone who can open the portal.
+    // Editing it is a lead's job and will gate on its own flag when the write
+    // routes land.
+    icon: CalendarDays,
   },
   {
     id: "admin",
@@ -325,6 +349,7 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
         id: "help.security-center",
         label: "Security Center",
         href: "/help#security-center",
+        requires: "canUseSecurityCenter",
       },
       {
         id: "help.updates",
@@ -350,6 +375,61 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
         href: "/help#people-access",
       },
       { id: "help.settings", label: "Settings", href: "/help#settings" },
+    ],
+  },
+  // Support Portal Lite — Sales/Solutions-Architecture staff only, ported
+  // from the former standalone apps/support-portal-lite/webapp. Rendered as
+  // its OWN exclusive left nav (this node's children, flattened, replacing
+  // the CS nav entirely) rather than merged into the CS section list above —
+  // see usePortalView.ts and CsmSideBar.tsx. Route access is still gated by
+  // useAccess (client-side Asgardeo groups), NOT this app's usual
+  // per-page feature-flag/roles mechanism — see App.tsx's RouteGuard for
+  // where that check actually happens; this section still exists in the
+  // tree unconditionally so CSM_PORTAL_FEATURE_OVERRIDES' WIP/hidden
+  // mechanism works on it too, on top of the audience gate.
+  {
+    id: "spl",
+    label: "Support Portal Lite",
+    href: "/spl/accounts",
+    icon: Layers,
+    // Cases lands in its own follow-up PR (feat/spl-merge-2-cases; this
+    // port was split by domain to stay under CodeRabbit's 100-file review
+    // limit) -- that PR also moves href back to /spl/cases (SPL's real
+    // landing page; see App.tsx's RootLanding for the matching redirect).
+    // Customer health and Team schedule/User scan/Usage metrics (this PR)
+    // are already in below.
+    children: [
+      {
+        id: "spl.accounts",
+        label: "Accounts",
+        href: "/spl/accounts",
+        icon: Building2,
+        // /spl/my-accounts is the same feature (an in-page My/All toggle on
+        // AccountsPage, no nav entry of its own — see App.tsx) so it must
+        // roll up to this node too, or landing there would fall through to
+        // no active nav highlight at all.
+        routes: ["/spl/my-accounts"],
+      },
+      { id: "spl.projects", label: "Projects", href: "/spl/projects", icon: FolderKanban },
+      {
+        id: "spl.team-schedule",
+        label: "Team schedule",
+        href: "/spl/team-schedule",
+        icon: CalendarClock,
+      },
+      { id: "spl.user-scan", label: "User scan", href: "/spl/user-scan", icon: UserSearch },
+      {
+        id: "spl.usage-metrics",
+        label: "Usage metrics",
+        href: "/spl/usage-metrics",
+        icon: BarChart3,
+      },
+      {
+        id: "spl.customer-health",
+        label: "Customer health",
+        href: "/spl/customer-health",
+        icon: HeartPulse,
+      },
     ],
   },
 ];

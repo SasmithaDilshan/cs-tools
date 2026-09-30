@@ -4,6 +4,13 @@ Go HTTP server (`net/http`, standard library only) that owns all core CS-platfor
 
 ## Architecture
 
+> **`cmd/` holds exactly one directory: `cmd/api`.** Never add a second
+> `package main` there — Choreo's build picks this service's main package from
+> `cmd/`, and a second directory fails the pipeline. It also drags dev-only
+> code into everything `go build ./...`, `go vet` and gosec walk. Put one-off
+> verification tooling in an env-var-guarded `TestServe*Harness` in
+> `internal/server/`, or in `scripts/`, or keep it out of the repo.
+
 Strict four-layer stack — no shortcuts across layers:
 
 ```
@@ -12,9 +19,11 @@ Handler → Service → Repository → PostgreSQL (pgx/v5)
 
 All wiring happens explicitly in `internal/server/routes.go` (no DI framework). The full dependency graph is built there: `NewRepository(db) → NewService(repo) → NewHandler(svc)`, then registered on a `net/http.ServeMux`.
 
-Middleware chain wraps the mux: **CorrelationID → Recovery → Logger → UserIDToken → Timeout** (10 s per request).
+Middleware chain wraps the mux: **CorrelationID → Recovery → Logger → UserIDToken → auth.Middleware → Timeout** (10 s per request; `auth.Middleware` was missing from this list before — see "Token validation and caller-scoped access" below for what it does).
 
 `CorrelationID` reads the `X-CSM-Correlation-ID` request header forwarded by the portal BFF, or generates a UUID v4 if absent. The ID is stored in the request context and echoed in the response header. All access log lines and panic logs include the correlation ID for end-to-end request tracing.
+
+`Logger`'s access log line also carries `callerId` — the same Asgardeo user UUID `apps/csm-portal/backend`/`apps/customer-portal/backend-v2` already log for the request that reached them (their `UserInfo.UserID`, the `userid` claim), decoded here from the `x-user-id-token` those BFFs forward — so one request can be traced across services by that one value, not just the correlation ID. Falls back to the client id from a pure machine-to-machine caller's own `x-jwt-assertion` token when there's no end user in the loop, or `-` when neither validated (no tokens presented, or a token that failed validation — its claims are never trusted or logged). This needs its own plumbing (`auth.IdentityHolder`, a mutable pointer `Logger` installs into the request context before `auth.Middleware` runs) rather than the simpler `auth.WithIdentity`/`IdentityFromContext` pair every handler/service already uses to read the caller's identity: `auth.Middleware` returns early with a 401 without ever calling `next.ServeHTTP` on an invalid token, so a value it only ever handed *forward* down the chain (the normal way `context.WithValue` works) would never reach `Logger`, which wraps it — and a rejected request must still show up in this access log. See `auth.IdentityHolder`'s own doc comment for the full reasoning.
 
 ## Running locally
 
@@ -41,13 +50,18 @@ The server loads `.env` automatically on startup (silently ignored if absent). P
 | `EVENT_HUB_CONNECTION_STRING` | no* | — | Event Hub namespace Shared Access Policy connection string. *Required once `EVENT_HUB_BROKER` is set |
 | `EVENT_HUB_TOPIC` | no* | — | Event Hub (Kafka topic) name. *Required once `EVENT_HUB_BROKER` is set |
 | `EVENT_PUBLISHING_ENABLED` | no | `false` | Must be `"true"` for `EventPublisherService` to actually get constructed, even with `EVENT_HUB_BROKER` fully configured — a separate safe-by-default kill switch |
-| `SUPPORT_ENGINEER_ROLE` | no | — | ServiceNow role name whose presence on a case comment's resolved author completes the case's "response" SLA clock — see "SLA clocks" below |
-| `CUSTOMER_ROLES` | no | — | Comma-separated ServiceNow role names whose presence on a case comment's resolved author marks a customer reply — see `applyCustomerReplyStateTransition` in "SLA clocks" below |
+| `CUSTOMER_ROLES` | no | — | Comma-separated ServiceNow role names whose presence on a case comment's resolved author marks a customer reply — see "Customer-reply state transition" below |
 | `SALES_ENTITY_BASE_URL` | no* | — | REST `sales/sales-entity-service` base URL (not GraphQL `sales/entity-graphql-service`). *Required once any `SALES_ENTITY_*` var is set |
 | `SALES_ENTITY_TOKEN_URL` | no* | — | OAuth2 token endpoint (client_credentials grant) |
 | `SALES_ENTITY_CLIENT_ID` | no* | — | Choreo connection client id |
 | `SALES_ENTITY_CLIENT_SECRET` | no* | — | Choreo connection client secret |
 | `SALES_ENTITY_SCOPES` | no | — | Optional space-separated OAuth2 scopes for REST `sales/sales-entity-service` |
+| `CSM_MIGRATION_MEMBERSHIP_REGISTRATION_ENABLED` | no | `false` | Must be `"true"` for `POST /users/me/memberships/register` to be registered at all (see "Membership registration" below). Off = the route 404s and nothing on that path can write to Salesforce |
+| `CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED` | no | `false` | Must be `"true"` for `POST /salesforce/events` to act on `Project_Contact__c`/`Contact` envelopes, the Contact writer included (see "Salesforce membership ingest" and "The Contact writer" below). The Account branch is unaffected |
+| `CSM_MIGRATION_SALESFORCE_ACCOUNT_INGEST_ENABLED` | no | `false` | Must be `"true"` for `POST /salesforce/events` to act on `Account` envelopes; off, they are acknowledged and ignored. Keep it off while the ServiceNow sync still writes `account`. The upsert resolves the row by `sf_id` (not unique since migration 0095), then links a same-`number` row with no `sf_id`, then inserts; the SE-1 columns are kept when Salesforce sends none; see "Salesforce Account ingest" for the full column set |
+| `CSM_MIGRATION_SALESFORCE_OPPORTUNITY_INGEST_ENABLED` | no | `false` | Must be `"true"` for `POST /salesforce/events` to act on `Opportunity` envelopes (`sf_opportunity` plus its `sf_opportunity_product` line items, see "Salesforce Opportunity ingest" below); off, they are acknowledged and ignored. Keep it off while csm-sync-service still copies these tables from ServiceNow: the two writers use different row ids and `sf_id` is not unique, so both on means duplicate rows |
+| `SALESFORCE_INGEST_RETRY_INTERVAL` | no | `5m` | How often the Salesforce ingest retry worker re-runs memberships whose DATABASE step FAILED because their project or account was not in CSM yet, and how old such a failure must be before it is re-run (see "Salesforce ingest ledger and the delayed-retry job" below). `0` disables the job, and so does an unparseable or negative value (logged as a warning; it fails closed rather than falling back to `5m`). Only runs when `CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED=true` |
+| `CSM_MIGRATION_PORTAL_WRITES_ENABLED` | no | `false` | Must be `"true"` to register the four portal-driven membership write routes under `/projects/{id}/contacts` (see "Portal-driven membership writes" below). Also needs `DATA_SOURCE=postgres`, a pool, and the full `SALES_ENTITY_*` set (`Config.HasPortalMembershipWrites`). Off means the routes are **not registered at all**, not 403 |
 
 \* `DB_USER`/`DB_PASSWORD`/`DB_NAME` are required when `DATA_SOURCE=postgres`
 and **optional** when `DATA_SOURCE=servicenow`, where entity reads and writes
@@ -56,7 +70,7 @@ modes — `Config.Validate` rejects a partial set, so a typo can't silently
 disable the Postgres-only endpoints. With `DATA_SOURCE=servicenow` and no
 database, `Config.HasDatabase` is false, `cmd/api/main.go` opens no pool, and
 `NewRouter` skips registering the two Postgres-only feature sets
-(`/event-publish-failures*`, `/cases/{caseId}/sla-clocks*`), which then 404.
+(`/event-publish-failures*`, `/sla-status`), which then 404.
 A failed Event Hub publish is logged instead of recorded — see
 `EventPublisherService.Publish`'s nil-`failures` branch.
 
@@ -179,12 +193,496 @@ against Choreo id `sales/sales-entity-service` (not GraphQL
 `sales/entity-graphql-service`). Token is refreshed on 401. An empty
 search result on CREATED/UPDATED/RESTORED is a 503 so the caller can retry
 (the event can arrive before Salesforce commits). This service does not call
-Salesforce REST; the REST sales entity-service does. REST Customer has no AccountNumber,
-Account_Vertical__c, or Technical_Owner_2 — `number` falls back to Salesforce
-Id and those other columns stay null.
+Salesforce REST; the REST sales entity-service does.
 Non-Account entities return 204 and are ignored (do not 400 — ASB would
-retry forever). DELETED soft-deletes by setting `deactivation_date`; never
-`DELETE FROM account` (project → account is `ON DELETE CASCADE`).
+retry forever).
+
+**What the Account branch writes** (`upsertAccount` + `mapSalesEntityCustomer` in
+`salesforce_event_service.go`, `UpsertFromSalesforce` in `account_repo.go`). The
+UPDATE lists only Salesforce-owned columns; `account_repo_salesforce_test.go` pins
+the list.
+
+- Plain assignment (a value cleared in Salesforce clears here): `name`, `sf_id`,
+  `industry`, `region`, `global_pod`, `phone` (a value over 64 characters keeps the
+  stored phone), `sales_region`, `sub_region`, `life_cycle` (`status`),
+  `naics_industry`, `sub_industry`, `classification`, `technical_owner_id`, the
+  billing address (`street`, `city`, `state_province`, `postal_code`, `country`),
+  `account_manager_id` (`owner.email`), `activation_date`, `lost_date`, `lost_reason`.
+- `COALESCE(new, stored)`: `customer_success_manager_id` (`csmEmail`),
+  `secondary_technical_owner_id`, `renewal_account_manager_id`
+  (`renewalManager.email`), `account_vertical`, `lost_reason_category`,
+  `deactivation_date`. Sales Entity sends these only after its "customer fields"
+  change (SE-1 in `docs/customer-onboarding/SALESFORCE_SYNC_PLAN.md`); until then they
+  keep the ServiceNow sync's value. Switch them to plain assignment once SE-1 ships.
+- Never written: `number` on an existing row (a new row gets the Salesforce Id,
+  decision D9), `cre_team_id`, `sre_team_id`, `support_tier`, `support_timezone`,
+  `suspension_process_state`, the two AI flags, `drive_location`.
+- Person references resolve by email against `"user"` (`LookupUserIDByEmail`); an
+  email with no user writes NULL and logs a WARN with the role and email.
+- A value longer than its VARCHAR column (`accountColumnLimits`) or a date that does
+  not parse (`2006-01-02`) is written as NULL with a WARN, so one bad field cannot
+  fail the event.
+- A customer with no name is acknowledged (204, no retry, no dead letter), logged,
+  and recorded FAILED in `salesforce_ingest_state`.
+
+**Duplicate guard and ledger.** CREATED/UPDATED/RESTORED run `shouldSkipIngest`
+with entity `account` and the customer's `lastModifiedDate`, then write the account
+row and a SUCCEEDED ledger row in one transaction; a failed write records FAILED
+(best effort) and returns the error so Service Bus redelivers. `EnsureAccount`
+writes without the guard (the row is known to be missing).
+
+**DELETED** sets `account.deleted_on` (migration 0171, decision D7) and writes a
+DELETED ledger row in one transaction, stamped with the current time or the recorded
+version when that is later (Salesforce's clock can run ahead of ours), so the row
+really becomes DELETED and the RESTORED that follows is not skipped. No Sales Entity
+read. `deactivation_date` is not touched: it is Salesforce's contract end date. Any
+later CREATED/UPDATED/RESTORED clears `deleted_on`. Never `DELETE FROM account`
+(project → account is `ON DELETE CASCADE`). `SearchAccounts` excludes
+`deleted_on IS NOT NULL`; `GetAccountByID`, `LookupAccountIDBySfID` (so
+`EnsureAccount`), the partner lookup and the joins from projects/cases/global search
+still see the row.
+
+## Salesforce membership ingest and onboarding steps
+
+The same `POST /salesforce/events` endpoint also ingests customer **memberships**
+— Salesforce `Project_Contact__c` (a Contact's membership of a project) and
+`Contact` — when `CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED=true`. Off by default:
+`routes.go` then constructs the service with `NewSalesforceEventService`, which
+acknowledges those entities with 204 and ignores them (the behaviour before this
+branch existed). On, it uses `NewSalesforceEventServiceWithMembershipIngest`
+with a `service.MembershipIngest` (membership repo, onboarding-step repo, the
+same `salesentity.Client`, the Contact writer's `SalesforceContactRepository`,
+and the optional `eventPublisher`). This is the
+**only** writer of customer memberships into Postgres: the customer portal and
+the hourly reconcile job never write these tables themselves, they replay the
+envelope (`{eventType, entity: "Project_Contact__c", referenceId}`) to this
+endpoint and let the ingest re-read Salesforce.
+
+**Entity dispatch** (`salesforce_event_service.go` → `salesforce_membership_ingest.go`;
+entity names are matched case-insensitively, `Project_Contact` is accepted as
+an alias of `Project_Contact__c`, and the raw value is logged):
+
+| Entity | Event | Action |
+|---|---|---|
+| `Project_Contact__c` | CREATED / UPDATED / RESTORED | `GetProjectContact` (REST `POST /project-contacts/search`) then `GetContact` (`POST /contacts/search`) → `ProjectMembershipRepository.Upsert` in one transaction → DATABASE step → publish `project_contact.invited` if the state is INVITED / RE-INVITED. It is published to **`PROJECT_EVENT_HUB_TOPIC`** (default `project-events`), not the shared `EVENT_HUB_TOPIC`: onboarding gets its own topic so a case-event backlog cannot delay an invitation, and its dead-letter queue can be watched on its own. Same broker and credentials, same failure recording — only the topic differs, and csm-notification-service consumes it with its own consumer group. |
+| `Project_Contact__c` | DELETED | `project_contact.state = DEACTIVATED` for that `sf_id`, and in the same transaction the user's account-level admin role is re-derived (`syncDerivedAdminRole`; the contact is read for its classification and `isCsAdmin`, and an unreadable contact leaves the roles alone); unknown id is a no-op (still 204). Never `DELETE FROM` |
+| `Contact` | CREATED / UPDATED / RESTORED | The Contact writer (below): `GetContact` once, write `"user"` / `account_contact` / contact-derived roles + ledger, then the CREATED/UPDATED path above for each of its `memberships` **with the fetched contact** (no second read); every membership is attempted, the first error is returned |
+| `Contact` | DELETED | No fetch: `account_contact.is_active` and `"user".is_active` = FALSE by `sf_id`, ledger stamped DELETED. Never a hard delete |
+| anything else | any | 204, ignored |
+
+An empty sales-entity-service result is a 503 (the ASB event can arrive before
+Salesforce commits), the same posture as the Account branch.
+
+**Duplicate-event guard.** Salesforce emits several UPDATED events per save and
+the portal replays the envelope after its own write, so the same version
+arrives more than once. `ingestMembership` parses the record's
+`lastModifiedDate` (`2026-09-18T06:37:07.000+0000`, `parseSalesforceLastModified`)
+and skips the upsert (204) when the membership's DATABASE step is `SUCCEEDED`
+with an `eventModifiedOn` that is not older. A `FAILED` step never blocks a
+retry. An unparseable date logs a warning and just runs the (idempotent)
+upsert with `now()`.
+
+**The upsert** (`repository/project_membership_repo.go`, actor
+`domain.SalesforceSyncActor` = `salesforce-sync`) resolves every row by natural
+key first and stamps `sf_id` on the way, so the same envelope can be replayed
+any number of times and old rows that pre-date the flow get their `sf_id`
+back-filled instead of duplicated:
+
+1. `project` by `key` (the Salesforce subscription key), then by `sf_id` → 404.
+2. `account` by `sf_id = contact.customerId`; a non-PARTNER membership falls
+   back to the project's own account → 404. (The Contact writer, which runs
+   first on a Contact event, ensures the contact's account with
+   `EnsureAccount`; this step does not.)
+3. `"user"` by `sf_id`, else by `LOWER(email)` — exactly one (`"user".email` is
+   not unique; two matches are a 409 rather than a guess) — else inserted with
+   `user_name = lower(email)`, `is_active = true`, `is_system_user =
+   isCsIntegrationUser`. An existing row gets name / email / `is_system_user`
+   refreshed, **never `user_name`** (it is the join key to `account_contact`).
+4. Global roles (`user_role`, `mapGlobalRoles`): always `external`, plus
+   `partner` when the **contact's account classification** is `Partner`
+   (case-insensitive) and `customer` otherwise — decision D1, the ServiceNow
+   script's basis; it used to follow the membership type (`PARTNER CONTACT`).
+   `{customer, partner}` is a managed pair (`ManagedGlobalRoles`): the other
+   half is revoked, so a reclassified account flips the role. When the
+   classification is unknown (a portal write that has just created the
+   contact) the contact is a customer and nothing is revoked. An integration
+   user gets no global roles at all and nothing is revoked. A role name
+   missing from the `role` table is a 503 naming it — the ServiceNow sync
+   seeds those rows. The admin role is **not** decided at this step — see
+   step 8.
+5. `account_contact` by (`sf_id`, account), else (account, `LOWER(user_name)`),
+   else inserted (`is_active = true`). `is_primary_contact` is Salesforce's
+   `isPrimaryContact` on insert and update; when Sales Entity sends none it is
+   FALSE on insert and left alone on update (the portal writes send none).
+6. `project_contact` by `sf_id`, else (project, account_contact), else
+   inserted; `email` and `state` (`INVITED` / `REGISTERED` / `RE-INVITED` /
+   `DEACTIVATED`, `normalizeMembershipState`; anything else is a 400) updated.
+7. Project groups (`project_contact_group`, `mapProjectGroups`, §6.4 of the
+   onboarding design): `Portal user` + `Security Contact` → `Full Access`;
+   `Portal user` → `General Access`; `Security Contact` → `Security Only`;
+   `Lead` additionally → `Lead User Group`; `Admin` additionally → `Admin`
+   (the group carrying the `ADMIN` project role, migration 0128 — `Admin`
+   used to be global-only and recorded nothing per project); `Business
+   Contact` additionally → `Business Contact  Group` (**two spaces**, the name
+   ServiceNow gave it and the one stored in `project_group`, matched exactly;
+   it carries the `BUSINESS_CONTACT` project role), so a contact can be, say,
+   Portal user + Business Contact. The six labels with no CSM group (Business
+   Owner / Promoter / Detractor, Technical Owner / Champion / Detractor) are
+   ignored by decision D2; they and any unknown label are logged once per
+   membership (`ignoredRoles` at info level, `unknownRoles` as a warning) and
+   never fail the ingest. The row set is replaced. A missing `project_group`
+   row is a 503. `salesforceRolesForGroups` maps the group back to `Business
+   Contact`, so a portal deactivation that writes the stored roles back to
+   Salesforce keeps it; the portal writes do not accept it as input.
+8. The derived account-level admin role (`syncDerivedAdminRole`), run
+   **after** step 7 so the membership just written counts: the user is an
+   admin when any of their live memberships carries the ADMIN project role or
+   the contact's `isCsAdmin` is set; the role is `partner_admin` for a
+   Partner-classified account and `customer_admin` otherwise (the same basis
+   as step 4), and the other one is always revoked. See "Admin is a project
+   role" below for the bugs this replaced.
+
+The DATABASE `onboarding_step` is written **inside the same transaction**
+(`upsertOnboardingStep` takes a `querier`, satisfied by both the pool and a
+`pgx.Tx`), so it can never disagree with the rows. On failure the ingest writes
+`DATABASE = FAILED` with `lastError` best-effort and returns the original error.
+`project_contact.invited` (`events.ProjectContactInvitedPayload`: membership /
+contact Salesforce ids, email, given / family name, project name and key, the
+raw Salesforce roles, `isIntegrationUser`, `type`, `eventModifiedOn` = the
+membership's Salesforce LastModifiedDate, and an optional `resend` marker) is
+published only after the transaction committed, only for INVITED / RE-INVITED,
+**and only when this event actually moved the membership into that state** —
+the ingest created the `project_contact` row
+(`SalesforceMembershipUpsertResult.CreatedProjectContact`), or the row's
+stored state before the upsert
+(`SalesforceMembershipUpsertResult.PreviousState`) was something else; a nil publisher
+skips it, a publish failure is logged (and recorded by
+`EventPublisherService`), never returned. csm-notification-service consumes it,
+provisions the Asgardeo user via the SCIM service and sends the invitation,
+then records IDENTITY and EMAIL through the endpoints below (SKIPPED for an
+integration user).
+
+**Echo suppression — the STATE TRANSITION is the signal, not the row insert.**
+Every portal membership write (below) also writes Salesforce, and every
+Salesforce write comes back here through the Service Bus subscriber as an
+ordinary CREATED/UPDATED envelope. By the time that echo lands the row already
+exists **and already carries the new state**, because the portal write wrote
+both first — so `PreviousState` equals the state the echo carries and nothing
+is published. Publishing for it would have csm-notification-service send a
+**second invitation e-mail for the one invitation the customer admin sent** —
+one click, two mails. An echo updates the row silently instead. A genuinely
+Salesforce-originated invitation (someone invited in Salesforce itself, or the
+historical backfill) still creates the row here and still publishes.
+
+This used to gate on `CreatedProjectContact` alone, which silently dropped
+**re-invitations made in Salesforce**: those move an existing DEACTIVATED row
+to RE-INVITED, so no row is created and the person was never told. Comparing
+the previous state catches that case (DEACTIVATED → RE-INVITED differs, so it
+publishes) while still suppressing the portal's own echo (RE-INVITED →
+RE-INVITED is unchanged, so it does not). Do not put the insert-only condition
+back.
+
+**Schema prerequisite**: the `sf_id` columns on `"user"`, `account_contact`
+and `project_contact` come from the csm-sync migration 0076, which is not in
+this repo's `migrations/`; the ingest fails at the first `SELECT ... sf_id`
+without it. `role` must contain `external`, `customer`, `partner`,
+`customer_admin`, `partner_admin`; `project_group` must contain the groups
+above (`Business Contact  Group` included, for a membership carrying that
+label).
+
+### The Contact writer
+
+Before it, a Contact event only refreshed the contact's existing memberships,
+so a contact with no membership (how a commercial or billing contact is
+onboarded) wrote nothing to CSM. The Contact writer
+(`internal/service/salesforce_contact_ingest.go`,
+`repository.SalesforceContactRepository`) owns a contact's `"user"` and
+`account_contact` rows and the contact-derived part of `user_role`, under the
+same `CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED` flag; the membership
+upsert stays the only writer of `project_contact`.
+
+CREATED / UPDATED / RESTORED (`ingestContact`):
+
+1. `GetContact` once. Sales Entity fields read beyond the membership path's:
+   `isPrimaryContact`, `accountId` (else `account.id`), `account.classification`.
+   `userActive` is decoded ahead of the Sales Entity release that exposes it
+   and is not written yet.
+2. Duplicate guard: `shouldSkipIngest` on the ledger (entity
+   `domain.SalesforceIngestEntityContact` = `contact`) with the contact's
+   `lastModifiedDate`. A duplicate skips the contact write but **not** the
+   membership fan-out, so a membership that failed on the first delivery is
+   retried by the redelivery (each membership has its own guard).
+3. No account on the contact: logged, nothing written (account_contact needs
+   one), fan-out still runs. Otherwise `EnsureAccount` on the contact's
+   account; a failure (`NotFoundError` when the account is not in CSM and the
+   Account ingest is off) records the ledger FAILED and fails the event, so
+   Service Bus redelivers it, and the delayed-retry job re-runs it through
+   `RetryContactIngest` once the account lands. A contact with no email (400)
+   or a failed write also fails the event (not retried by the job).
+4. One transaction, under a transaction-scoped advisory lock on the contact
+   `sf_id`: `"user"` via `upsertMembershipUser` (by `sf_id`, then unique email;
+   `user_name` never renamed; a user this writer soft-deleted — ledger
+   DELETED — is reactivated, nobody else's `is_active` is touched); global
+   roles via `syncGlobalRoles` with the managed `{customer, partner}` pair;
+   `account_contact` via `upsertAccountContact` with `is_primary_contact`;
+   the account move — the contact's active `account_contact` rows on other
+   accounts go `is_active = FALSE`, **unless** the contact still holds a live
+   (non-DEACTIVATED) membership on a project of that account (a partner
+   contact legitimately keeps a row there); `syncDerivedAdminRole`; the ledger
+   row SUCCEEDED.
+5. Fan out to `contact.memberships` through `ingestMembership`, passing the
+   fetched contact (re-read only if it is not the membership's own contact).
+   The fan-out re-points each membership at the new account's
+   `account_contact`.
+
+Integration users keep the ingest's behaviour: a `"user"` with
+`is_system_user = TRUE` and an `account_contact`, no global roles, no admin
+decision.
+
+DELETED (`deactivateContact`): no fetch (Salesforce hides deleted records).
+`account_contact.is_active` and `"user".is_active` go FALSE by `sf_id`, and the
+ledger row is stamped DELETED, keeping its recorded version (or now, for a
+contact never ingested), so a later RESTORED is not skipped as a duplicate.
+Nothing is hard-deleted: `project_contact` and `onboarding_step` reference these
+rows. Roles are left alone (Salesforce deletes the memberships with their own
+events).
+
+**Onboarding steps API** (`onboarding_step`, migration 0118; Postgres-only,
+404 without a pool, like `scheduled_task_run`): one row per
+(`membershipSfId`, `step`), `step` ∈ IDENTITY / DATABASE / EMAIL /
+REGISTRATION, `status` ∈ SUCCEEDED / FAILED / SKIPPED, `attemptCount`
+incremented on every rewrite, `eventModifiedOn` = the Salesforce version the
+write was based on.
+
+- `PUT /onboarding-steps/{membershipSfId}/{step}` — body `{status, lastError?,
+  eventType, eventModifiedOn, email, contactSfId?, projectId?,
+  projectContactId?}` → 200 with the row. `lastError` is dropped unless
+  `status` is FAILED (a stale error must not outlive a success) and truncated
+  to 1000 characters (runes). Every method requires an internal caller
+  (`AccessScope.Unrestricted`, i.e. `AUTH_INTERNAL_CLIENT_IDS`); anyone else
+  gets 403. `created_by`/`updated_by` is `onboarding-step-api` —
+  callers are internal services, no identity is derived from the request.
+- `GET /onboarding-steps/{membershipSfId}` → `{steps: [...]}` in step order; an
+  unknown membership is an empty list, not a 404.
+- `POST /onboarding-steps/search` — `{filters: {projectId?, membershipSfIds?,
+  statuses?}, pagination}` → `{steps, total, limit, offset}`, newest first,
+  `normalizePagination` (limit 20, max 50).
+
+## Salesforce ingest ledger and the delayed-retry job
+
+`salesforce_ingest_state` (migration 0170) is the per-record ledger of the
+Salesforce ingest for every object that is not a membership (memberships keep
+using `onboarding_step`). One row per (`entity`, `sf_id`), where `entity` is the
+CSM table the record lands in (`domain.SalesforceIngestEntityAccount` = `account`,
+`domain.SalesforceIngestEntityContact` = `contact` for the Contact writer, which
+writes two tables; more to come per family); `status` ∈ SUCCEEDED / FAILED (CHECK constraint),
+`event_modified_on` = the Salesforce `LastModifiedDate` the last write was based on,
+`attempt_count` = consecutive failures (up while the row stays FAILED, back to 1 on
+a success or on the first failure after one, so a record Salesforce saves often
+never reaches the retry cap by succeeding). `repository.SalesforceIngestStateRepository`
+(`Get`, `Upsert`, `ListMissingParentFailures`, `RecordRetryAttempt`) is generic over `entity`; a repository that writes
+its own rows in a transaction records the ledger in that same transaction through
+`upsertSalesforceIngestState(ctx, q querier, ...)`, like `upsertOnboardingStep`. The
+upsert only moves the outcome columns when the incoming version is at least as new,
+or the recorded row was stamped DELETED.
+
+`shouldSkipIngest` (`internal/service/salesforce_ingest_guard.go`) is the duplicate
+guard on that ledger, with `ingestMembership`'s three rules: skip when a SUCCEEDED
+row's `event_modified_on` is not before the incoming version; a missing or
+unparseable `LastModifiedDate` skips the guard (warning logged) and uses
+`time.Now().UTC()`; a row last written by DELETED never blocks. FAILED rows never block.
+
+`EnsureAccount(ctx, sfID)` on the Salesforce event service returns a parent
+account's CSM id for a child ingest: it reads `account.id` by `sf_id`
+(`SalesforceIngestSupport.Accounts`, wired regardless of flags); when absent and the
+Account ingest is on it runs the ordinary `upsertAccount` and reads again; when
+absent and the Account ingest is off it returns `NotFoundError`
+`account not found for sfId "<sfId>"` — the prefix `repository.IsMissingParentError`
+matches, so every child family's FAILED row is picked up by the delayed-retry job.
+
+**The delayed-retry job** (`SalesforceIngestRetryWorker`,
+`internal/service/salesforce_ingest_retry_worker.go`). Service Bus redelivers a
+failed envelope five times within seconds, but a new project reaches CSM through
+the ServiceNow sync up to five minutes later, so a membership on a brand-new project
+dead-letters before its project exists. Started from `routes.go` (it needs the
+membership-ingest-enabled service, publisher included) only when
+`CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED=true` and
+`SALESFORCE_INGEST_RETRY_INTERVAL` > 0; stopped by the `closePublishers` func
+`cmd/api/main.go` calls on shutdown, before the producers close. Every tick (the
+first one after one interval) it reads DATABASE steps with status FAILED, a
+`last_error` starting "project not found" / "account not found", `updated_on`
+older than the interval and `attempt_count` < 12
+(`OnboardingStepRepository.ListMissingParentFailures`), and re-runs
+`ingestMembership` for each as UPDATED (`RetryMembershipIngest`), 30s timeout each,
+at most 100 per tick. A failed re-run re-records the step with `attempt_count` + 1;
+when it failed before the ingest recorded anything (e.g. the Sales Entity fetch),
+the job itself counts the attempt (`RecordRetryAttempt`: attempt + 1, `updated_on =
+now()`, `last_error` kept, only while the step is still FAILED with the `updated_on`
+the job read). So a parent that never arrives stops being retried after about an
+hour at the default. FAILED ledger rows are read the same way
+(`SalesforceIngestStateRepository.ListMissingParentFailures`, which applies the
+registered-retrier, missing-parent and attempt-cap filters in SQL before the batch
+limit, so a backlog of rows the job would skip cannot starve eligible ones) and handed to
+`EntityRetriers[entity]`; `opportunity` registers one (`RetryOpportunityIngest`) when
+`CSM_MIGRATION_SALESFORCE_OPPORTUNITY_INGEST_ENABLED=true`, and `contact` always
+registers one (`RetryContactIngest`: the whole Contact writer as UPDATED, fan-out
+included; it runs under the membership flag the job already requires). Other
+entities are only counted (the Account ingest records FAILED rows but has no parent to wait for, so it
+registers none).
+
+## Salesforce Opportunity ingest
+
+`POST /salesforce/events` acts on `Opportunity` envelopes when
+`CSM_MIGRATION_SALESFORCE_OPPORTUNITY_INGEST_ENABLED=true` (off by default: they are
+acknowledged and ignored). Code: `internal/service/salesforce_opportunity_ingest.go`
+(attached to the event service with `WithOpportunityIngest` in `routes.go`),
+`internal/repository/sf_opportunity_repo.go`, `GetOpportunity` in
+`internal/salesentity/opportunity.go`. Plan: `docs/customer-onboarding/SALESFORCE_SYNC_PLAN.md` §7.
+
+- **CREATED / UPDATED / RESTORED:** `POST /opportunities/search {id, limit: 1}` on the
+  REST Sales Entity (empty result = `ServiceUnavailableError`, so Service Bus
+  retries), then `shouldSkipIngest` on the ledger with entity `opportunity`, then
+  `EnsureAccount(customerId)`, then one transaction that writes `sf_opportunity`, its
+  line items and the SUCCEEDED ledger row.
+- **`sf_opportunity`** by `sf_id` (not unique): advisory lock `"sf-opportunity:"+sfId`,
+  update every row with the `sf_id`, else insert with `gen_random_uuid()`;
+  `created_by`/`updated_by` = `salesforce-sync`, `sync_time_stamp = now()`. Written:
+  `name`, `account_id`, `stage`, `is_won`, `close_date` (= `supportAccountEndDateRollUp`,
+  not Salesforce `CloseDate`: what the ServiceNow script stored, decision D6),
+  `eula_version`, `eula_version_decimal` (first `\d+\.\d+` in the version; `3.4` when
+  the version is empty; NULL when it has no decimal). When Sales Entity does not send
+  the `eulaVersion` key at all (a build without the field) both EULA columns are kept.
+  **Never written:** `type`, `owner`, `engagement_code`, `query_hour_state`
+  (ServiceNow-derived; `TestSfOpportunitySQL_NeverTouchesServiceNowColumns` pins the
+  column lists). Values longer than their VARCHAR (migration 0080) are truncated and logged.
+- **Line items (derived path):** the embedded `subscriptionLineItems` replace the
+  opportunity's `sf_opportunity_product` rows as a set, in the same transaction:
+  update by `line_item_sf_id` (else insert), then delete the rows under this
+  `opportunity_id` the list does not mention. Written: `name`, `product_name`,
+  `quantity`, `service_start_date`, `service_end_date`, `product_code`,
+  `product_description`, `product_family`, `product_unit`, `eng_product_code`,
+  `product_sf_id`, `classification`, `environment`, `total_price`. **Never written:**
+  `development_support_hours`, `engagement_code`. With duplicate `sf_opportunity` rows
+  for one `sf_id`, the oldest owns the line items. Standalone `OpportunityLineItem`
+  events need a Sales Entity endpoint that does not exist yet and are still ignored.
+- **DELETED:** hard delete `sf_opportunity WHERE sf_id = $1` (FKs cascade line items
+  and project links, null invoices) plus a DELETED ledger row, in one transaction;
+  a never-ingested opportunity is acknowledged and logged.
+- **Failures:** an error after the fetch writes a FAILED ledger row (best effort,
+  outside the rolled-back transaction). A missing account (Account ingest off) fails
+  with `NotFoundError` "account not found for sfId ..." so the delayed-retry job
+  re-runs it; with the Account ingest on, `EnsureAccount` ingests the account first.
+  The retry job itself only runs while the membership ingest is on.
+- **Duplicate guard:** the REST Sales Entity does not return `lastModifiedDate` for
+  opportunities yet, so today the guard is skipped with a warning and the idempotent
+  upsert runs on every event; it starts working once Sales Entity sends the field.
+
+## Membership registration (`POST /users/me/memberships/register`)
+
+H-0 of the customer onboarding flow. A customer invited in the Customer Portal
+gets a Salesforce Contact and a `Project_Contact__c` membership in state
+INVITED; something has to mark that membership REGISTERED once the person
+actually signs in. **ServiceNow owns that today** — its verification page
+clears the contact's lockout flag on first sign-in. After cutover the Customer
+Portal owns it, and the work lives here rather than in the portal, so the
+portal never needs Salesforce write access of its own.
+
+`POST /users/me/memberships/register` → **204, no body**, no request body either. The
+caller is the Customer Portal acting on behalf of the signed-in user, so it
+carries an end-user token and the caller is resolved exactly the way
+`GET /users/me` resolves it: the `email` claim of the already-validated
+`x-user-id-token` (`middleware.UserIDTokenFromContext` → `emailFromJWT`).
+A missing header is a 401, an undecodable token a 400 — no new convention.
+
+**Postgres-only and off by default.** `CSM_MIGRATION_MEMBERSHIP_REGISTRATION_ENABLED` must
+be exactly `"true"` (same parse as every other flag here); while it is off
+`routes.go` does not register the route at all, so it 404s and nothing on this
+path can reach Salesforce. It also needs what it depends on — a pool, the four
+`SALES_ENTITY_*` vars, and `CSM_MIGRATION_SALESFORCE_MEMBERSHIP_INGEST_ENABLED=true` for the
+re-ingest — so with the ingest off this 404s too, rather than flipping
+Salesforce with no matching database write.
+
+**The no-op fast path is the point.** The portal calls this on *every* profile
+load, and a membership is only ever INVITED once, so the overwhelmingly common
+outcome is: one indexed read of `project_contact`, no rows, return. Nothing is
+logged and Salesforce is never touched. Keep it that way — anything added to
+this path runs on every profile load of every user.
+
+`MembershipRegistrationRepository.InvitedMembershipsByEmail` (`membership_registration_repo.go`) is
+that read: `project_contact` joined to `account_contact`, matched on
+`LOWER(pc.email)` (the same join `access_repo.go`'s `RegisteredProjectIDs`
+uses for the mirror-image state), state ∈ INVITED / RE-INVITED, returning
+`project_contact.sf_id` (the membership) and `account_contact.sf_id` (the
+Contact). A row missing either id is left out — it could not be flipped in
+Salesforce anyway. Same `sf_id` schema prerequisite as the membership ingest
+(csm-sync migration 0076).
+
+**THE ORDER OF THE TWO SALESFORCE WRITES IS LOAD-BEARING — do not reorder
+them.** Salesforce's `SN_T_Project_Contact` trigger recomputes every
+membership's `State__c` from the Contact's "Locked Out [ Service Now ]" boolean
+(`Contact.State__c`) on **every** save: locked out → INVITED, not locked out →
+REGISTERED, unless the membership is DEACTIVATED. So per membership, in this
+order:
+
+1. `UpdateContactLockout(contactSfId, false)` — `PATCH /contacts/{id}`
+   `{lockoutStatus: false}`, 200 with no body.
+2. `UpdateProjectContactState(membershipSfId, "REGISTERED")` —
+   `PATCH /project-contacts/{id}` `{state}`, 200 with the record
+   sales-entity-service re-read from Salesforce (a failed re-read there is
+   still a 200 with an **empty body**, which the client returns as a zero
+   record and no error).
+
+Doing it the other way round has the trigger overwrite REGISTERED back to
+INVITED on the state write's own save — verified by hand. If step 1 fails,
+step 2 is **skipped** for that membership: with the flag still set the state
+write would be a no-op that looked like a success.
+
+3. **Re-ingest**, so Postgres matches Salesforce before the request returns
+   instead of whenever the ASB envelope for the same save arrives. This calls
+   `SalesforceEventService.HandleEvent` — the very same entry point
+   `POST /salesforce/events` is backed by — with the envelope Salesforce itself
+   would have emitted (`{eventType: UPDATED, entity: "Project_Contact__c",
+   referenceId: membershipSfId}`). That seam is deliberate: the mapping, the
+   `ProjectMembershipRepository.Upsert`, the DATABASE step and the duplicate
+   guard are then literally the same code, none of it reimplemented. The flip
+   changed the record's `LastModifiedDate`, so the duplicate guard does not
+   skip it. `routes.go` hands the membership-registration service the *same*
+   membership-ingest-enabled `SalesforceEventService` value the Salesforce
+   event handler holds.
+4. **`REGISTRATION` = SUCCEEDED / FAILED** per membership via the existing
+   `OnboardingStepRepository.Upsert`, actor `domain.SalesforceSyncActor`
+   (`salesforce-sync`, the same actor the ingest records steps under),
+   `eventType` UPDATED and `eventModifiedOn` = the persisted record's own
+   `LastModifiedDate` when Salesforce returned one, else `now()`. The whole
+   per-membership attempt is guarded as one unit: any of the three writes
+   failing records FAILED with the (1000-rune-truncated) error, since the
+   membership is only really registered once Salesforce is flipped *and*
+   Postgres has caught up. The step write itself is best-effort and bounded by
+   its own 3s timeout — the Salesforce side is already committed by then, so it
+   is logged, never returned.
+
+**Error posture**: one membership failing never stops the others; each failure
+is logged with the membership and contact ids. An error is returned only when
+**every** membership failed (the first one, so its own status mapping
+survives) — a partial success is a 204, and the memberships that did not flip
+are still INVITED, so the caller's next profile load retries them.
+
+**PII**: no log line on this path carries the user's email address. Membership
+and contact Salesforce ids identify the record. (The `onboarding_step` row does
+store `email` — that column is part of the existing ledger and the ingest fills
+it the same way; the rule is about logs.)
+
+The two write methods live on the same `salesentity.Client` as the reads
+(`UpdateContactLockout`/`UpdateProjectContactState`, `patch`/`patchWithRetry`
+mirroring `search`/`searchWithRetry` — same token handling, same
+refresh-once-on-401). One status mapping differs on purpose: a **404 on a
+PATCH is a `NotFoundError`**, not the `ServiceUnavailableError` the read path
+returns, because on a write against a record this service has already ingested
+a 404 means the record is genuinely gone, not "Salesforce has not committed it
+yet, retry". A 400 (Salesforce rejected the write) stays a `DownstreamError`.
+`service.SalesEntityMembershipWriteClient` is a separate interface from
+`SalesEntityMembershipClient` so the ingest cannot accidentally gain write
+access to Salesforce; `*salesentity.Client` satisfies both.
 
 Seven call sites publish today, all ServiceNow-data-source-only (`DATA_SOURCE=servicenow`;
 there is no Postgres-backed equivalent for any of them). There is also one
@@ -225,32 +723,71 @@ easy to wire up for real once both exist.
   carries only a few fields — see `snCreateCaseResponse`), it re-fetches the
   case via `GetCaseByID`, whose own SN response already resolves the
   reporter's display name, the project's name, and each watcher's email —
-  exactly what `events.CaseCreatedPayload` needs. `Recipients` is the
-  resolved watch list's emails only (an explicit, deliberate decision — this
-  service has no other notion of who should be emailed for a case); a case
-  created with no watchers is a normal state, not an error, so publishing is
-  silently skipped rather than sending a payload
+  exactly what `events.CaseCreatedPayload` needs. A case created with no
+  recipients (either way, see below) is a normal state, not an error, so
+  publishing is silently skipped rather than sending a payload
   `csm-notification-service`'s `events.Validate` would reject anyway for an
   empty `recipients` list.
+
+  **Only `type: "case"` requires a severity to publish at all.**
+  `CaseCreatedPayload.Priority` has no `omitempty` (a consumer always
+  expects a real value) and `""` is not a real priority, so a nil severity
+  used to skip the whole publish — but severity is a `"case"`-only column
+  (`validateCreateCaseRequest`), so that gate previously meant the other
+  four types `publishCaseCreatedEvent` also serves —
+  `engagement`/`service_request`/`security_report_analysis`/`announcement`
+  — never published `case.created` at all. **Fixed at explicit request**:
+  the severity gate now only applies when `req.Type == "case"`; the other
+  four publish regardless, with `Priority` simply left `""`
+  (`csm-notification-service` already renders that gracefully — see its own
+  `CLAUDE.md`).
+
+  **`Recipients` depends on `req.Type`.** For `case`/`engagement`/
+  `service_request`/`security_report_analysis` it's still the case's own
+  resolved watch list emails only (this service has no other notion of who
+  should be emailed for these types) — which, on the Postgres/dual-write
+  data source, already includes the account's four default-watcher
+  stakeholders once `addAccountDefaultWatchers` has run (see
+  `CaseRepository.AccountDefaultWatcherIDs` below). For `announcement`,
+  `publishCaseCreatedEvent` instead resolves the audience via
+  `CaseService.ProjectContactEmailsByRole` — every `project_contact`
+  currently holding the `SECURITY_CONTACT` project role when
+  `req.IsSecurityAnnouncement` is true, else every contact holding
+  `PORTAL_USER` — bypassing the watch-list mechanism entirely, since a
+  project contact often has no matching `"user"` row to add as a
+  `work_item_watcher` (`work_item_watcher.user_id` is `NOT NULL`). Falls
+  back to the case's own watch-list emails (the account's default
+  watchers) when no contact holds the requested role for that project — a
+  project with nobody in the requested role must still notify someone, not
+  silently notify no one. `ProjectContactEmailsByRole` is Postgres-only
+  (`project_contact`/`project_role` have no ServiceNow equivalent); on
+  `snCaseService` it delegates to `pgFallback` when configured, else
+  returns empty (no error) — same "can't resolve, skip" posture as every
+  other Postgres-only gap in this file.
+
+  `csm-notification-service`'s own `handleCaseCreated` mirrors this split
+  on the Chat side: its Google Chat alert is skipped entirely for these
+  same four non-`"case"` types (an exclude-list keyed on
+  `CaseCreatedPayload.CaseType`) — those types notify by email only, per
+  the same explicit request. See that service's own `CLAUDE.md`.
 - **`snIncidentService.CreateIncident`** publishes `incident.created` via
   `publishIncidentCreated`, called the same way. No enrichment round trip is
   needed here: `req.Subject`/`req.AdditionalComments` already carry
   everything the payload needs (`Title`/`ShortDescription`, the latter
-  falling back to `Subject` when `AdditionalComments` is absent). This
-  service does not build or send an `IncidentLink` at all — this stays
-  strictly a publisher of the fact that an incident was created, nothing
-  more; `csm-notification-service` builds its own "Open in Portal" link
-  from the event's `EntityID` (`recipientlinks.Resolver.IncidentLink`), the
-  same way it already builds `case.created`'s portal link rather than
-  trusting a caller-supplied one — see that service's own `CLAUDE.md`.
-  Likewise, neither `Product` (which Google Chat space) nor `CallTo`
-  (on-call number) is ever set from this service — per explicit decision,
-  all notification-routing resolution belongs entirely in
-  `csm-notification-service`, which substitutes its own configured defaults
-  (`DEFAULT_CHAT_PRODUCT`/`INCIDENT_DEFAULT_CALL_TO`) when either is absent
-  from the payload. Consuming events and sending emails/Chat alerts/calls is
-  never this service's job — only publishing the raw fact that something
-  happened is.
+  falling back to `Subject` when `AdditionalComments` is absent).
+  `incident.created` has exactly one reaction on the receiving side now — a
+  Twilio voice call — not a Google Chat alert: `csm-notification-service`
+  removed that reaction entirely, per explicit product direction (an
+  incident pages on-call directly; a separate Chat post was redundant with
+  that) — see that service's own `CLAUDE.md`. `CallTo` (on-call number) is
+  never set from this service either way — per explicit decision, all
+  notification-routing resolution belongs entirely in
+  `csm-notification-service`, which substitutes its own configured
+  `INCIDENT_DEFAULT_CALL_TO` when it's absent from the payload. `Product` is
+  still accepted on the wire (decode compatibility) but no longer read by
+  `csm-notification-service` at all. Consuming events and sending
+  emails/Chat alerts/calls is never this service's job — only publishing
+  the raw fact that something happened is.
 - **`snCaseService.CreateCaseComment`** publishes `case.comment_added` via
   `publishCommentAdded`, called after the SN comment-create call succeeds.
   Enriches via `GetCaseByID` for `ProjectID`/`CaseTitle`/`Recipients`, the
@@ -387,23 +924,25 @@ service's own `CLAUDE.md`, `dispatch.subjectLine`).
 `cv.DeployedProductDetails.Product.Name` (e.g. `"WSO2 API Manager"`, `""`
 when the case has no deployed product) — used by `publishCaseCreated`,
 `publishCaseAcknowledged`, and `publishSeverityChanged` to populate their
-payloads' `Product` field.
-`CaseCreatedPayload.Product` was previously never populated at all ("this
-service has no data source for it yet"); now it doubles as both a display
-value in `csm-notification-service`'s redesigned `case.created` Chat card
-and that service's own Chat-space routing key (`GoogleChatConfig.Spaces`
-matches on it, falling back to `DEFAULT_CHAT_PRODUCT` when empty) — an
-operator's `GOOGLE_CHAT_SPACES` config needs a `Product` entry matching
-each deployed product's actual display name for per-product routing to
-take effect; until then, every case routes to `DEFAULT_CHAT_PRODUCT`'s
-space same as before this field was populated.
+payloads' `Product` field, a purely-display value in
+`csm-notification-service`'s Chat cards. `CaseCreatedPayload.Product` was
+previously never populated at all ("this service has no data source for it
+yet"); it plays no role in Chat routing on the receiving side —
+`csm-notification-service` removed its earlier per-product Chat-space
+routing (`GoogleChatConfig.Spaces`, `DEFAULT_CHAT_PRODUCT`) once it became
+clear this deployment has no real per-product Chat space need:
+`case.created`/`case.acknowledged`/`case.severity_changed` now always route
+to a single fixed Chat audience regardless of `Product` — see that
+service's own `CLAUDE.md`.
 
 `caseTeamName(cv)` (same shared-helper pattern) resolves
 `cv.AccountDetails.CreTeam.Name` (e.g. `"Team Nova"`, `""` when the case
 has no account or the account has no CRE team) — used by the same three
-publishers to populate their payloads' `Team` field, a purely-display
-value in `csm-notification-service`'s Chat cards (unlike `Product`, it
-plays no role in routing). `cv.AccountDetails` (and its `CreTeam`) is
+publishers to populate their payloads' `Team` field, also purely display in
+`csm-notification-service`'s Chat cards for these three event types (SLA
+breach alerts are the one place a case's team genuinely drives Chat
+routing — see `csm-notification-service`'s own `CLAUDE.md`, "SLA
+breach-alerting engine"). `cv.AccountDetails` (and its `CreTeam`) is
 resolved by `GetCaseByID` from the case's own embedded ServiceNow account
 object at no extra request cost — but as of this field's introduction,
 that embedded object's `creTeam`/`sreTeam` are documented in
@@ -412,21 +951,119 @@ the ServiceNow integration, even though the standalone accounts endpoint
 does return them. `Team` may therefore come back empty in practice until
 that catches up — not a bug in this service if so.
 
-**Known, accepted inconsistency**: `publishCaseAcknowledged` re-reads
-`caseProductName(cv)` from a fresh `GetCaseByID` at acknowledge time,
-rather than reusing whatever product `publishCaseCreated` read at create
-time — so if a case's deployed product genuinely changes between creation
-and acknowledgement, the two Chat alerts can route to different spaces.
-This service has no persisted state for a case at all (ServiceNow is the
-sole source of truth, no local DB row per case — see this file's own
-"SLA clocks" section for the one deliberate exception), so "preserving the
-creation-time product" would mean adding new durable state purely to pin a
-routing decision, not a same-service code change. It's also arguably not
-even the more correct behavior: if a case's product association is
-corrected after creation, routing its acknowledgement to the *current*
-owning team's space is arguably more useful than a stale one. Left as
-current-product routing; revisit only if the same-space guarantee turns
-out to matter in practice.
+**`caseService.UpdateCase` (the Postgres data source) supports
+`Acknowledge`/`AssigneeEmail` too** — `caseService.acknowledgeCase`/
+`updateCaseAssignee` (own branches in `UpdateCase`, alongside
+`updateCaseWatchList`/`updateCaseParent`/`updateCaseFields`) write
+`work_item.acknowledged_by_user_id`/`assigned_to_id` via
+`CaseRepository.AcknowledgeCase`/`UpdateCaseAssignee`.
+`CaseRepository.AcknowledgeCase` claims a case first-write-wins inside a
+transaction that row-locks `work_item` (`SELECT ... FOR UPDATE`) before
+reading whether it's already claimed, so two concurrent Acknowledge calls on
+the same case can't both believe they were first; it returns
+`alreadyAcknowledged` plus whoever now holds the claim, read back from the
+same "user" join regardless of which branch actually ran. `UpdateCaseAssignee`
+has no such guard at all — it unconditionally writes `assigned_to_id` every
+call, no no-op detection in the repository layer.
+- **This service's own contribution on top of that**: neither
+  `acknowledgeCase` nor `updateCaseAssignee` originally published a
+  `case.acknowledged`/`case.assigned` event on the Postgres data source at
+  all — Acknowledge/AssigneeEmail worked (the write itself succeeded,
+  ServiceNow-mirror dispatch fired under dual-write mode), but
+  `csm-notification-service` never heard about either one unless
+  `DATA_SOURCE=servicenow`. Closing that gap added:
+  - **`updateCaseAssignee`'s own no-op detection**, done at the service
+    layer since the repository doesn't do it: a `GetCaseByID` fetch right
+    before the write (gated on `s.publisher != nil`, so a deployment with no
+    Event Hub configured pays nothing extra) compares
+    `cv.AssignedEngineer.Email` against the requested `AssigneeEmail`
+    case-insensitively — the same guard `snCaseService.UpdateCase`'s own
+    AssigneeEmail path applies, just done here instead of in SQL.
+  - **`publishCaseAcknowledged`/`publishCaseAssigned`**, reusing the exact
+    same shared helpers/payload shapes ServiceNow's own versions do
+    (`caseProductName`/`caseTeamName`/`watchListUserEmails`,
+    `events.CaseAcknowledgedPayload`/`CaseAssignedPayload`) — both live in
+    the same `service` package, so nothing needed duplicating.
+    `publishCaseAcknowledged` only fires when `!alreadyAcknowledged` (a
+    repeat `Acknowledge:true` against an already-claimed case changed
+    nothing, so nothing to publish — the same distinction
+    `snCaseService.publishCaseAcknowledged`'s own call site makes) and takes
+    `acknowledgerName` straight from `AcknowledgeCase`'s own return value, no
+    second lookup. `publishCaseAssigned` re-fetches the case via
+    `GetCaseByID` *after* the write (the pre-write fetch above exists only
+    to detect the no-op, not to reuse as a payload source) and guards
+    `cv.ProjectDetails` as nilable — unlike ServiceNow's `CaseView`, which
+    always has one, this data source's does not (see `GetCaseByID`'s own
+    comment on why project/deployment joins are `LEFT JOIN`s here).
+  - **`GetCaseByID`'s query now also joins `acknowledged_by_user_id`**
+    (`LEFT JOIN "user" ack ON ack.id = wi.acknowledged_by_user_id`, same
+    pattern as its pre-existing `assigned_to_id`/`ae` join) to populate
+    `CaseView.AcknowledgedBy` — previously always nil on this data source
+    even after a successful Acknowledge, since nothing read the column back
+    for display outside `AcknowledgeCase`'s own one-off query.
+- **Not carried over from the ServiceNow path**: there is no elevated-role
+  check on `Acknowledge` here — `acknowledgeCase`'s own doc comment notes
+  this is deliberate, not an oversight: no Postgres-side permission model
+  exists yet, so this data source only requires a known authenticated
+  caller, same as every other Postgres case mutation. `SearchCaseView` still
+  has no `AcknowledgedBy` field either (matching ServiceNow's own
+  `SearchCaseView`-equivalent, which doesn't surface it there either — only
+  `GetCaseByID` does).
+
+**`work_item_activity` (migration 0055) now gets written to on the
+Postgres data source too.** `SearchCaseActivities`' own `field_change` branch
+already rendered any `field_name` generically (`caseActivityFieldChangeLabel`
+title-cases it, e.g. `"assigned_to_id"` → `"Assigned To Id"`) — the table was
+fully wired up on the read side, but **nothing in this codebase ever wrote to
+it** on this data source (the ServiceNow data source's own case activity
+comes from a live upstream call instead, not this table; this table appears
+to exist for the ServiceNow data source's own sync process to populate,
+which this data source has no equivalent of). The practical symptom: a
+Postgres-native state/severity/workState/assign/acknowledge/parent change
+produced no entry in the case's own activity feed at all — a real, reported
+gap ("with servicenow data source all are shown").
+- **`CaseRepository.RecordCaseFieldChangeActivity(ctx, caseID, fieldName,
+  oldValue, newValue, actorEmail)`** is the missing write half — a plain
+  `INSERT INTO work_item_activity`. `caseService.recordFieldChangeActivity`
+  wraps it best-effort (log and ignore on failure, same posture as every
+  `publishXxx` helper in this file): the mutation itself has already
+  succeeded by the time this runs, so a failure here must never undo it or
+  report the request as failed. A blank `actorEmail` skips the write
+  entirely (no anonymous rows) rather than inserting one with an empty
+  `user_email`.
+- **Old/new value convention, since there's no ServiceNow sync to match
+  against**: `state`/`severity`/`work_state` store the raw lowercase domain
+  enum value (e.g. `"work_in_progress"`), the same representation the JSON
+  API already uses for these fields — no separate display-label map
+  invented purely for this. `assigned_to_id`/`acknowledged_by_user_id`
+  store a human display name instead (e.g. `"Jane Doe"`, or `"Unassigned"`
+  for "no prior assignee") — a raw UUID would be useless to a human reading
+  the activity feed, and `caseActivityFieldChangeLabel` already title-cases
+  `field_name` itself to say *which* field, so the value only needs to say
+  *who*. `parent_id` stores the parent case's own number (e.g.
+  `"CS0001"`), fetched via an extra best-effort `GetCaseByID` before/after
+  the write in `updateCaseParent` (rare operation, so the extra round trips
+  are an acceptable cost) — an empty string if that lookup fails.
+- **Call sites**: `updateCaseAssignee`/`acknowledgeCase`/`updateCaseParent`
+  already resolve an `actor` for other reasons (ServiceNow mirror
+  attribution, first-write-wins claiming) and reuse `actor.Email` directly.
+  The main `UpdateCase` body's state/severity/workState branch is the one
+  exception — it has never required an authenticated caller before (no
+  permission model exists for Postgres-side case mutations at all yet), so
+  it resolves the actor **best-effort**: a missing/invalid `x-user-id-token`
+  just means this update's activity entry is skipped, not a newly-rejected
+  request. That branch's own `before` `*domain.CaseView` fetch (previously
+  gated on `s.publisher != nil && req.State != nil`, only for
+  `case.status_changed`'s sake) is now unconditional whenever `req.State` or
+  `req.WorkState` is set, since the activity write needs the prior value
+  regardless of whether Event Hub is configured at all.
+- **Deliberately out of scope**: `updateCaseFields`'s combinable "plain
+  field" bundle (Subject/Description/DeploymentID/DeployedProductID/fix-ETAs/
+  RelatedCaseID/WorkaroundProvided) does not write to `work_item_activity`
+  yet — up to nine fields in one call, several without a cheaply-available
+  "old" value, is a larger and more speculative addition than the six
+  branches above; left for a future change if it turns out to matter in
+  practice the same way assign/state did.
 
 Every helper above runs **synchronously** (not detached/async the way
 `apps/csm-portal/backend`'s own `internal/handler/cases.go` `publishAsync`
@@ -448,130 +1085,578 @@ point, so a notification-side hiccup must not be reported to the caller as a
 failed
 create.
 
-## SLA clocks
+## Portal-driven membership writes
 
-`sla_clocks` (migration `000042`, `internal/domain/entity.go`'s `SLAClock`,
-`internal/repository/sla_clock_repo.go`, `internal/service/sla_clock_service.go`)
-is durable per-case SLA timer state — `caseId`/`clockType`, `startedAt`/`dueAt`,
-and up to three tier-crossing timestamps. Like `event_publish_failures`, it has
-no ServiceNow equivalent and is always backed by Postgres regardless of
-`DATA_SOURCE`, so `caseId` is a plain string, not a foreign key — a
-ServiceNow-backed case has no local `cases` row to reference.
+`CSM_MIGRATION_PORTAL_WRITES_ENABLED=true` (exactly `"true"`, off by default)
+registers four write endpoints under the existing `/projects/{id}/contacts`
+namespace. They are how **both** portals change who is a contact on a project:
+the Customer Portal when a customer admin manages their own users, and the CSM
+Portal when an account manager does it for them. Same endpoints, same
+semantics, one implementation — `service.ProjectMembershipWriteService`
+(`project_membership_write_service.go`), `handler.ProjectMembershipHandler`.
 
-`clockType` is deliberately **not** a fixed enum, but only three values are
-actually used: `response`, `workaround`, `resolution` — see
-`internal/service/sla_policy.go`'s `slaDurations`, which maps a case's raw
-severity to each applicable clock's duration per WSO2's own
-[support policy](https://wso2.com/licenses/support-policy/6.0) (Enterprise
-plan). `LOW` severity's entry has only `response` — the policy defines no
-fixed Workaround/Resolution SLA at that tier ("best efforts"), so those two
-clocks are never registered for a `LOW`-severity case at all. `slaDurations`
-also has a small note-worthy exception: `MEDIUM`'s `resolution` duration
-approximates the policy's "1 Business Week" as a flat 7 days, then
-`csm-notification-service`'s slaengine (which computes the actual due
-timestamp, not this service) rolls that forward off a weekend if it would
-otherwise land on one — see `slaAvoidWeekendClockTypes` and
-`events.SLAClockRegisterPayload.AvoidWeekendDueDate`. Registering a clock
-that already exists for a `(caseId, clockType)` pair resets it from scratch
-(`RegisterSLAClock`) rather than adjusting it in place — including its
-eight display-only fields (case number/WSO2 case id/title/type/product/
-team/priority/state, a point-in-time snapshot from registration, added in
-migration `000046`), populated so `csm-notification-service`'s slaengine
-can build a Google Chat breach card from one `GetClock` call with no second
-lookup — this service is the only thing with case data to give it.
+The CSM database is the source of truth. Salesforce is kept in step, not read
+from as an authority. The Service Bus subscriber still feeds
+Salesforce-originated changes into the ingest above, so a portal write and a
+Salesforce edit converge on the same rows.
 
-Exposed at `POST /cases/{caseId}/sla-clocks` (register/reset),
-`GET /cases/{caseId}/sla-clocks/{clockType}` (read one), and
-`PATCH /cases/{caseId}/sla-clocks/{clockType}/tiers/{tier}` with body
-`{"status": "reached"}` (`domain.SLATierStatus` — the only valid value today,
-modeled as an enum rather than a bare boolean so a future status doesn't
-need a breaking change) to mark a `50`/`75`/`100` tier reached, idempotently
-— a second call for an already-reached tier returns the original timestamp,
-not an error, plus `alreadyReached: true` so the caller can tell the two
-cases apart (the underlying `UPDATE ... WHERE ... IS NULL` already decides
-atomically which caller "really" set it; `alreadyReached` is just that
-outcome surfaced instead of discarded). `SLAClockService.Pause`/`.Resume`
-(set/clear `pausedAt`) have **no HTTP route at all** — `sn_case_service.go`
-is their only caller, in-process (see below), so an HTTP surface for them
-would be pure speculative API surface nothing outside this service needs.
+### The write ordering, and why the database commits last
 
-**`alreadyReached` reflects the database claim only, not whether any
-caller's own reaction (e.g. publishing a notification) to winning that
-claim ever actually succeeded.** Gating a reaction on it being false is a
-real, valid choice when duplicate-free behavior matters more than
-guaranteed delivery — `csm-notification-service`'s
-`internal/slaengine.Engine` does exactly this (see that repo's `CLAUDE.md`
-for its full reasoning: it accepts the rare risk of a lost notification on
-an Event Hub publish failure in exchange for not duplicate-publishing every
-time a stale wake entry gets rediscovered, e.g. after a Redis outage) — but
-it is a trade-off, not a free win: a caller whose reaction failed after it
-won the claim will see `alreadyReached=true` on retry and skip the
-reaction forever, having never completed it once. Only gate a reaction on
-this field if that risk is acceptable for the use case, or if the
-reaction's own completion is tracked separately and durably instead. The
-sole caller today is
-`csm-notification-service`'s SLA timer engine
-(`internal/slaengine`), which owns the actual scheduling (a Redis wake index
-and ticker) — this service only stores the result of that scheduling, it does
-not compute or track wake times itself.
+Every one of the four follows the same shape:
 
-`sn_case_service.go` is the only caller today (Postgres-backed cases have no
-SLA tracking — this is ServiceNow-only, same as most of this file):
+1. Open the Postgres transaction. **Take a transaction-scoped advisory lock
+   on the (project, address) pair**, then read the project and its account,
+   and the membership that may already be there.
+2. Write **Salesforce inside that transaction**, searching before every create.
+3. Write the rows through the existing membership `Upsert`.
+4. Commit.
 
-- **`CreateCase`** publishes `sla.clock.register` (`publishSLAClockRegister`,
-  folded directly into the existing `publishCaseCreated` — sharing its
-  `GetCaseByID` fetch and its `s.publisher == nil` guard, since registration
-  is inherently Kafka-based too) for every clock `slaDurations` has an entry
-  for at the case's severity. Deliberately runs **before**
-  `publishCaseCreated`'s own watch-list check: that check only gates the
-  `case.created` *email*, and SLA tracking must happen regardless of
-  whether the case has watchers.
-- **`CreateCaseComment`** calls `applyResponseSLAOnComment` for every
-  customer-visible comment (`req.Type == domain.CommentTypeComment` — work
-  notes/activity entries don't count). This service has no auth/identity
-  layer of its own (the `x-user-id-token` it forwards is opaque), so
-  "is this comment's author a support engineer" is answered by resolving
-  the comment's author (`resolveCommentAuthor`, the same lookup
-  `publishCommentAdded` already needs for its own display name) and
-  checking their ServiceNow role via `SNUserService.SearchUsers` filtered
-  by email, against the **configurable** `SUPPORT_ENGINEER_ROLE` env var
-  (deliberately no committed default — organisation-specific vocabulary,
-  same reasoning `apps/csm-portal/backend`'s own `CSM_TEAM_REGISTRY` uses).
-  A match claims all three tiers (`50`/`75`/`100`) of the `response` clock
-  at once via `SetSLAClockTierReached` — claiming all three, not just
-  `100`, is what suppresses a later spurious breach alert: when
-  `csm-notification-service`'s slaengine eventually reaches the wake-index
-  entries this clock's registration created, its own `SetTierReachedIfUnset`
-  call sees each already claimed and quietly drops the wake entry instead
-  of publishing a breach.
-- **`UpdateCase`** calls `applyCaseStateSLAEffects` after every genuine
-  state-changing PATCH, using the new state alone (no "old state" needed —
-  see that function's own doc comment for why). `Awaiting Info`/
-  `Solution Proposed` pauses `workaround`+`resolution`; any other state
-  resumes both; `Closed` completes `resolution` the same
-  claim-all-three-tiers way as `response` above, and pauses (not
-  completes) `workaround` — **`workaround` has no completion trigger wired
-  up at all yet** (see the `// TODO` in `applyCaseStateSLAEffects`; it
-  needs a "workaround provided" signal this domain model doesn't have).
+The property this buys, agreed explicitly: **the database and Salesforce are
+updated together or neither is, and the caller gets an error.** The reasoning
+is one asymmetry — Salesforce has no transaction, so once its write returns it
+is final; PostgreSQL does, and rolling it back costs nothing. So the only
+participant that can be undone goes **last**. Anything that fails before the
+commit leaves both systems exactly as they were.
 
-All three are deliberately **independent of `s.publisher`** except
-registration itself (inherently Kafka-based) — pause/resume/completion are
-pure in-process DB writes via `SLAClockService`, so a deployment without
-Event Hub configured must not lose them as a side effect of that.
+`repository.ProjectMembershipRepository.UpsertWithin` is what holds the
+transaction open across the Salesforce half: it takes a
+`MembershipWritePlan`, a callback given the resolved
+`MembershipWriteContext{Target, Existing}` and returning the
+`SalesforceMembershipUpsert` to write. This deliberately **reuses
+`upsertMembershipTx`**, the same seven-step resolve-and-write the Salesforce
+ingest uses — there is exactly one writer of customer memberships into
+Postgres, and it did not get a second copy.
 
-**`CreateCaseComment`** also calls `applyCustomerReplyStateTransition` —
-not itself an SLA-clock write, but it triggers one indirectly. When a
+Two details worth knowing:
+
+- **The Salesforce half runs before the row write, not after**, even though
+  the design reads "write the rows, then Salesforce". The rows need the
+  Salesforce ids: `project_contact.sf_id`, `account_contact.sf_id` and
+  `"user".sf_id` are stamped from the records this step creates or finds.
+  What matters for correctness is unchanged — the commit is still last, and
+  it is still the only thing that can be rolled back.
+- **Every Salesforce create is preceded by a search.** The Sales Entity
+  create endpoints are deliberately not idempotent, so searching first is
+  what makes a retry, a hand edit made directly in Salesforce, and an
+  orphaned record from a previous failure all get *adopted* rather than
+  duplicated.
+- **A contact the membership already links to is read by ID, not by
+  address.** `project_contact.email` (the address the person was invited
+  under) and the Salesforce Contact's own `Email` are different fields and do
+  drift apart — `domain.UserContactAccess` compares them for exactly that
+  reason. Resolving a known membership by address could therefore miss its
+  Contact, and the search-first rule would then do the wrong thing very
+  confidently: create a second Contact, create a second `Project_Contact__c`,
+  and leave the real membership untouched while the role change or
+  deactivation reported success. `writeSalesforce` calls `GetContact` with
+  `MembershipWriteContext.Existing.ContactSfID` whenever it has one, and only
+  falls back to the address search when that id does not resolve (so every
+  self-healing path still works).
+- **Concurrent writes for the same (project, address) are serialized**, by
+  `pg_advisory_xact_lock(hashtextextended(projectId || '|' || email, 0))`
+  taken as the transaction's first statement. Under READ COMMITTED the reads
+  in step 1 see nothing of an uncommitted sibling, and those reads are what
+  decide between "invite" and "change" — so a double-submitted invitation, or
+  two admins inviting the same person at once, would both find no membership,
+  both search Salesforce (both searches finishing before either create), and
+  both create. Two Contacts, two `Project_Contact__c` records, two e-mails.
+  The lock holds for the whole write *including* the Salesforce calls, which
+  is the point: that is exactly the window. It is keyed per (project,
+  address), so unrelated writes never queue behind each other — and the same
+  address being invited to two different projects at once is still two
+  Salesforce contact searches, which the search-first rule handles only if
+  the first has committed. That narrow case is unchanged.
+
+**The one residue.** A commit that fails *after* Salesforce succeeded leaves a
+Salesforce record with no row behind it. The search-first rule makes that
+self-healing — the next write for the same person adopts it — but it is also
+recorded, so it can be retried rather than lost:
+`repository.ErrMembershipCommitFailed` marks that specific case, and
+`recordSalesforceOrphan` writes it to **`event_publish_failures`** with
+`eventType = "salesforce.membership_write"`, the membership Salesforce id as
+`entityId`, and a JSON payload of what should have happened (operation,
+project, email, the ids, state, roles, whether the contact/membership was
+created). That table was reused rather than a new one added: its shape already
+fits exactly (a type, the id it is about, the JSON, the error, a `resolved_on`),
+and it already has a repository, a service, a search endpoint and a resolve
+endpoint — so the backlog is visible the day this ships instead of needing its
+own API first. A dedicated `salesforce_write_failures` table would have been
+the same five columns with a second copy of all of that around them. **Nothing
+drains it automatically**; recording it is the whole of the commitment here.
+The caller gets a 503 ("the change could not be saved; please try again"),
+which is accurate: retrying is both safe and the right thing to do.
+
+### The four endpoints
+
+All four are **internal-caller-only** via `AccessService.ResolveScope`
+(`AccessScope.Unrestricted`, i.e. `AUTH_INTERNAL_CLIENT_IDS`), exactly as the
+onboarding-step endpoints are — anyone else gets 403 before anything
+downstream is touched. A portal END USER must never call them directly:
+whether this particular customer admin may invite this particular person into
+this particular project is the portal backend's decision, made against the
+account it has already scoped the session to. This service deliberately does
+not re-derive that from a forwarded user token.
+
+`{id}` is the CSM project UUID, so these sit beside the search and get already
+in that namespace. `{email}` keys the membership — the way the Customer Portal
+addresses a contact today, and the only identifier a caller has before the
+person exists in either system. `created_by`/`updated_by` is
+`portal-membership-write` (`domain.PortalMembershipWriteActor`), distinct from
+the ingest's `salesforce-sync`, and the DATABASE onboarding step records
+`eventType = PORTAL_WRITE` stamped with the Salesforce record's own
+`LastModifiedDate` so the echo of that very write is recognised as not newer
+by the ingest's duplicate guard.
+
+| Endpoint | Body | Success | Errors |
+|---|---|---|---|
+| `POST /projects/{id}/contacts` | `{email, firstName?, lastName?, roles: []}` | **201** + `ProjectMembership` | 400 bad address / unknown role / no roles, 403, 404 unknown project, 409 already an active contact or a missing Salesforce id, 503 |
+| `POST /projects/{id}/contacts/validate` | `{email, inviterEmail?}` | **200** + `ProjectMembershipValidation` (`valid:false` + `reason` CONFLICT/FORBIDDEN/INVALID + `message` for a refusal; INVALID with the generic support message when a Salesforce id is missing) | 400 bad address, 403 not internal, 404, 503 |
+| `PATCH /projects/{id}/contacts/{email}` | `{roles: []}` | **200** + `ProjectMembership` | 400, 403, 404, 409 missing Salesforce id, 503 |
+| `DELETE /projects/{id}/contacts/{email}` | — | **204** | 400, 403, 404, 409 missing Salesforce id, 503 |
+| `POST /projects/{id}/contacts/{email}/resend-invitation` | — | **204** | 400, 403, 404, 409 not INVITED or missing Salesforce id, **429** inside the cooldown, 503 |
+
+- **Invite** resolves the project and its account, finds the Salesforce
+  contact by address and creates it only if absent, finds the membership for
+  (project, contact) and creates it only if absent (otherwise PATCHes its
+  state and roles), writes the rows, commits, then publishes
+  `project_contact.invited`. State is `INVITED`, or `RE-INVITED` when a
+  previously DEACTIVATED membership is being brought back. An address that is
+  already an **active** contact on the project is a 409 ("change their roles
+  instead") — the adopt-don't-duplicate rule is about the *Salesforce* record,
+  not about re-inviting somebody who is already there. At least one role is
+  required: an invitation granting nothing would provision an identity that
+  sees an empty portal.
+- **Validate** is Invite's dry run: the same caller gate, the same "already
+  an active contact" rule and the same `InvitationValidator`, run against the
+  project and membership read outside any transaction
+  (`ResolveWriteContext`, no advisory lock). Nothing is written and nothing
+  is published. A refusal is a 200 with `valid:false` so the caller can tell
+  it apart from a failed check; a valid answer carries the Salesforce contact
+  the invitation would adopt, if any. The Customer Portal calls it before
+  showing the invite form.
+- **Change roles** replaces the portal-managed labels of the Salesforce
+  `Role__c` picklist (Portal user, Security Contact, Lead, Admin) and, with
+  them, the membership's project groups. `Role__c` is PATCHed as a whole list,
+  so `mergePortalManagedRoles` keeps every other label already on the fetched
+  Salesforce membership (Business Contact, the six D2 labels, anything
+  unknown) after the requested ones; the groups are derived from that merged
+  list, so a Business Contact keeps `Business Contact  Group`. When the fetched
+  membership carries neither `roles` nor `role`, the write fails (503) rather
+  than overwrite blind. A re-invitation PATCHes roles the same way. The state is
+  untouched (the PATCH sends only `role`). An empty list is accepted and removes
+  every portal-managed role.
+- **Deactivate** sets `DEACTIVATED` in both systems. Never a delete:
+  DEACTIVATED is a real value of both the Salesforce picklist and
+  `project_contact_state_enum`, and it is what the portal does today. The
+  roles are left exactly as they are — the derived admin role ignores
+  deactivated memberships, so nothing has to be erased to drop it.
+- **Resend invitation** writes nothing at all. It re-publishes
+  `project_contact.invited` with `resend: true`, which is the one thing that
+  makes csm-notification-service bypass its own already-sent guard (that guard
+  is what stops a duplicate Salesforce event turning into a duplicate email,
+  so a deliberate resend has to say so). Valid only while an invitation is
+  outstanding — `INVITED` or `RE-INVITED`. REGISTERED means they already
+  accepted and DEACTIVATED means they should not get one; RE-INVITED is not
+  the product of a resend but the state **Invite** writes when it brings a
+  deactivated contact back, so a person left in it by a failed notification
+  has the same right to a retry as an `INVITED` one. A
+  **five-minute cooldown per membership** is enforced from the EMAIL step's
+  `updatedOn` in the onboarding ledger (the record of when an invitation was
+  actually sent, written by csm-notification-service itself rather than
+  guessed at here); inside it the call is a 429. No EMAIL step yet means none
+  has been sent, so there is nothing to wait for. With no publisher
+  configured this is a 503 rather than a silent success: unlike an
+  invitation, whose database and Salesforce writes are the substance of the
+  call, a resend **is** the event.
+
+**A missing Salesforce id fails the write cleanly.** Every write needs the
+project's `sf_id` and its account's `sf_id`; a write on a membership that is
+already there (role change, deactivate, re-invite, resend) also needs that
+membership's `project_contact.sf_id` and its contact's Salesforce id. If any
+is NULL or blank, `requireSalesforceLinks` (resend: an inline check) refuses
+the call with a **409** carrying a generic, per-operation message ("This
+contact can't be updated right now. Please contact WSO2 support.") **before any
+Salesforce call**, and logs the operation, the project and membership ids and
+which ids were missing. The alternative was worse on every path: a NULL
+`project.sf_id` failed the target read with a raw driver error (bare 500); a
+blank one reached Salesforce and was refused there with an internal
+validation message, sometimes after a Contact had been created; and a
+membership with no `sf_id` was looked up by (project, contact) and, on a miss,
+a second `Project_Contact__c` was created — for a deactivation, a new
+DEACTIVATED record beside the real one. 409 rather than 400/404/503: the
+request is well-formed, the rows exist, and retrying will not help until the
+data is fixed; what blocks it is the rows' current state, and a
+`ConflictError` message reaches the caller verbatim.
+
+`apierror.TooManyRequestsError` was added for the cooldown (429 in
+`writeServiceError`) — the first rate-limit this service applies, and a
+deliberate caller-pacing decision rather than a downstream limit passed
+through, so its message is returned to the caller.
+
+`roles` on the wire are the raw Salesforce `Role__c` labels
+(`Portal user` / `Security Contact` / `Lead` / `Admin`), matched
+case-insensitively and normalised to Salesforce's own spelling before being
+sent. A label Salesforce would reject is a **400 naming it**, not an
+`ignoredRoles` log line: the ingest is right to tolerate an unknown role on a
+record Salesforce already holds (refusing would strip a real membership over a
+vocabulary gap), and wrong to tolerate one a caller is asking us to write.
+
+### The Sales Entity write client (`internal/salesentity/membership_writes.go`)
+
+`SearchContactByEmail` (`POST /contacts/search {email}`), `CreateContact`
+(`POST /contacts`, 201), `SearchProjectContact`
+(`POST /project-contacts/search {projectId, contactId}`),
+`CreateProjectContact` (`POST /project-contacts`, 201),
+`UpdateProjectContact`/`UpdateProjectContactState`/`UpdateProjectContactRoles`
+(`PATCH /project-contacts/{id}` with `state` and/or `role`), and
+`UpdateContactLockout` (`PATCH /contacts/{id}` `{lockoutStatus}`).
+
+Two contract details that are easy to get wrong:
+
+- **Absence is an answer, not an error.** The by-Id `GetContact`/
+  `GetProjectContact` above map an empty result to a 503 (the Salesforce event
+  can arrive before the record is visible). The two *search* methods here do
+  the opposite and return `found = false` with no error — "no such contact" is
+  exactly what tells the caller to create one. A row that comes back not
+  actually carrying the address asked for is also `found = false`: a duplicate
+  contact is recoverable, a membership written for the wrong person is not.
+- **`PATCH /project-contacts/{id}` answers 200 with an EMPTY body** when its
+  own re-read fails, even though the write itself succeeded. That is decoded
+  as a zero `ProjectContact` and **no error** — treating it as a parse failure
+  would roll back a transaction over a write that actually landed. The caller
+  keeps the id it already held.
+
+**Dependency**: the two create endpoints are being added to
+`digiops-sales/sales-entity-service` in a parallel change (branch
+`sales-entity-contact-create`) to exactly this contract. Until they are
+deployed, `CSM_MIGRATION_PORTAL_WRITES_ENABLED` must stay off — which is why
+the flag not registering the routes at all is the right default: a portal
+built against them fails loudly with a 404 instead of writing one system and
+not the other.
+
+### Admin is a project role now, and the account-level role is derived
+
+**The bug this fixes.** Salesforce's `Admin` role used to map straight to the
+**global** `customer_admin`/`partner_admin` role on the user, with nothing
+recorded per project — and `syncGlobalRoles` computed its revoke list as
+`managedAdminRoles - wanted` from *the single membership being processed*. So
+processing any one non-admin membership **revoked that user's admin
+everywhere**. A customer admin on project A who was also an ordinary portal
+user on project B lost their admin the moment B's membership was re-ingested.
+
+**The agreed model.** Admin is stored per project, and the account-level role
+is derived from it: admin on any project under an account means admin on every
+project under that account, and nothing outside it.
+
+- `project_role_enum` **already carried `ADMIN`** (migration 0028 declared
+  all five values up front), so there was no enum to widen — the task brief
+  expected one, and the schema had already done it. What was missing is the
+  vocabulary a membership can attach to: a membership reaches its roles
+  through `project_contact_group → project_group → project_group_role →
+  project_role`, never `project_role` directly. **Migration 000084** seeds the
+  `ADMIN` `project_role` row, an `Admin` `project_group`, and the link between
+  them, idempotently (those rows are normally seeded by the ServiceNow sync,
+  so this has to be safe against a database that already has them).
+  `mapProjectGroups` maps Salesforce `Admin` → that group, alongside the
+  existing PORTAL_USER / LEAD_USER / SECURITY_CONTACT mappings.
+- `mapGlobalRoles` no longer decides admin at all. It returns `external` plus
+  `customer`/`partner` (from the contact's account classification, decision
+  D1), and separately reports **which** of the two admin roles this contact
+  would hold (`SalesforceMembershipUpsert.AdminRoleName`: `partner_admin` for
+  a Partner-classified account, else `customer_admin`) — never whether they
+  hold it.
+- `syncDerivedAdminRole` (step 8 of the upsert, after the project groups are
+  written; also the Contact writer, and the membership DELETED path) decides
+  that, as **one query over the user's memberships**:
+
+  ```sql
+  SELECT EXISTS (
+    SELECT 1
+    FROM "user" u
+    JOIN account_contact ac ON LOWER(ac.user_name) = LOWER(u.user_name)
+    JOIN project_contact pc ON pc.account_contact_id = ac.id
+    JOIN project_contact_group pcg ON pcg.project_contact_id = pc.id
+    JOIN project_group_role pgr ON pgr.project_group_id = pcg.project_group_id
+    JOIN project_role pr ON pr.id = pgr.project_role_id
+    WHERE u.id = $1
+      AND pr.role = 'ADMIN'::project_role_enum
+      AND (pc.state IS NULL OR pc.state <> 'DEACTIVATED'::project_contact_state_enum))
+  ```
+
+  It binds only the user id — nothing about the membership in hand — which is
+  precisely what makes the old failure impossible. Running it *after* step 7
+  is what makes the membership being written count. A failed derivation aborts
+  the write rather than quietly deciding "not an admin", which would revoke a
+  real admin's role on a transient error.
+
+  **Which role is the contact's, not the membership's.** The admin role (like
+  `customer`/`partner`) follows the contact's account classification, so it
+  no longer matters which membership is in hand: every writer passes the same
+  `AdminRoleName` for the same contact, the user holds that one role when
+  they are an admin, and the other is revoked. An earlier version split the
+  answer by `ac.account_id <> p.account_id` per membership, which disagreed
+  with ServiceNow for a partner's employee on the partner's own project and
+  gave `partner_admin` to a related contact on another account's project;
+  before that, a single "admin anywhere" answer combined with the role of the
+  membership in hand let a non-admin partner membership trade one role for
+  the other. The contact's own Salesforce `isCsAdmin` is an additional grant,
+  never a revocation condition.
+
+A deactivated membership's `ADMIN` role does not count, which is how
+deactivating someone's last admin project drops their account-level role
+without erasing anything. A membership DELETED in Salesforce re-derives the
+role in the same transaction as the deactivation.
+
+### Account roles on the contacts search
+
+`POST /projects/{id}/contacts/search` lists only live memberships: DEACTIVATED
+rows (the ingest's soft delete; ServiceNow hard-deleted them, so no portal ever
+listed one) are left out of both the page and `total`. The change-request notice
+recipients (`cr_notice_repo.go` `ProjectContactEmails`) and the SLA-status
+customer-admin check (`project_stats_repo.go` `hasCustomerAdminContactExists`)
+leave them out the same way. It returns each contact's
+**`accountRoles`** alongside their project `roles` — a separate list, never
+merged: `roles` is what they may do on *this* project, `accountRoles` what they
+are across the account. It is read from `user_role`/`role` (where
+`syncDerivedAdminRole` materialises the derived admin role) restricted to the
+five names this write path owns — `external`, `customer`/`partner`,
+`customer_admin`/`partner_admin` — so an internal role a staff account happens
+to hold can never leak into a customer-facing contact list. Empty for a row
+with no linked `"user"`, and always empty on the ServiceNow data source, which
+has no notion of this role set. The point of it is the admin entry: both
+portals can render an Admin badge on a contact list without a second call per
+row.
+
+## SLA status
+
+**Replaces the old `sla_clocks` table entirely** (removed in migration
+`000079`) — see that migration's own comment, and the history below, for
+why. `GET /sla-status` (`internal/domain/entity.go`'s `SLAStatus`,
+`internal/repository/sla_status_repo.go`, `internal/service/sla_status_service.go`)
+now reads SLA state **live from the `sla` table** (migration `0048`), which
+ServiceNow's own SLA engine populates via sync — real
+`businessElapsedPercent`/`hasBreached`/`stage` per `(work_item, sla_policy)`,
+not a value this service computes, schedules, or approximates itself. There
+is no registration step, no duration policy to guess, and no
+pause/resume/completion to track in-process any more: the synced row already
+reflects all of that, pauses included.
+
+**History, for context on the removal.** `sla_clocks` was a stand-in built
+*before* the `sla` table existed in Postgres: it hand-registered a clock per
+case at creation time (`sn_case_service.go`'s old `publishSLAClockRegister`),
+using a hardcoded severity->duration guess
+(`internal/service/sla_policy.go`'s old `slaDurations`, approximating WSO2's
+own [support policy](https://wso2.com/licenses/support-policy/6.0)) rather
+than ServiceNow's real SLA computation, and needed a matching amount of
+in-process bookkeeping to stay roughly correct (`applyResponseSLAOnComment`
+completing the `response` clock early on a qualifying comment,
+`applyCaseStateSLAEffects` pausing/resuming/completing `workaround`/
+`resolution` on state changes) — all of that is now redundant: the `sla`
+table already reflects a support-engineer response, a case being on hold, or
+a case closing, because ServiceNow's own SLA engine reacted to those same
+events on its own side and the sync carried the result in. Removing this
+also fixed a real, if minor, side effect: the old `TestSNCaseService_CreateCase_PublishesCaseCreated`
+test only passed some of the time because `publishSLAClockRegister` was a
+second, unrelated `Publish` call folded into `CreateCase`'s response path.
+
+**`GET /sla-status` returns every currently-active clock across every
+case-like work item in one paginated list** (`sla.is_active = TRUE`,
+joined through `sla_policy.target` for `clockType` — `response`/
+`workaround`/`resolution`, lower-cased from `RESPONSE`/`WORKAROUND`/
+`RESOLUTION`), not one clock for one case — `integrations/csm-notification-service`
+polls this periodically and diffs `businessElapsedPercent` against what it
+already alerted on itself (see that repo's own `internal/slaengine`), rather
+than this service pushing individual tier-crossing notifications the way the
+old design's Redis wake index did. This is a genuinely different shape from
+every other paginated endpoint in this file: its one real caller is a
+periodic bulk poll (~5,500 rows checked live), not a UI list a human scrolls
+through, so it has its own pagination cap
+(`normalizeSLAStatusPagination` — default `500`, max `2000`) well above the
+generic `20`/`50` `normalizePagination` uses everywhere else; a low cap here
+would only turn one intended round trip into over a hundred for no one's
+benefit.
+
+**`GET /sla-status` is internal-caller-only** (`slaStatusService.
+requireInternalCaller`, mirroring `onboarding_step_service.go`'s own helper
+of the same name/reasoning) — `AccessService.ResolveScope`'s scope must be
+`Unrestricted` (an `AUTH_INTERNAL_CLIENT_IDS` client), refused with
+`ForbiddenError` otherwise. This is the one Postgres-backed read in this
+file that genuinely has no narrower scope to fall back to instead: it
+returns every active case's clock — case number, title, product, severity —
+in one bulk list with no per-project/per-case filtering of its own, unlike
+every other endpoint `AccessService` scopes by project membership. `auth.
+Middleware` itself lets an unauthenticated request through by design (see
+its own doc comment — enforcement is each endpoint's own job), so without
+this check this endpoint would have handed out every active case's SLA data
+to any caller able to reach the service at all, token or not — a real gap
+this closed, not a hypothetical one.
+
+**`sla` can carry more than one row per `(work_item, target)`** (a policy
+reset re-applies the SLA — 662 of ~124,600 pairs, checked live), so the
+repository picks the most recently started one per pair (`DISTINCT ON`,
+falling back to most recently updated for the rare row with no `start_on`)
+rather than an arbitrary one. `businessElapsedPercent` and `hasBreached` are
+read straight off the row — `hasBreached` is not re-derived from the
+percentage even though the two agree in every row checked so far
+(`>= 100%` exactly where `hasBreached` is true): ServiceNow's own verdict is
+what should be trusted if that ever changes. The eight display fields
+(case number/WSO2 case id/title/type/product/team/priority/state) mirror
+`GetCaseByID`'s own product/severity joins exactly, and — unlike the old
+design's point-in-time registration snapshot — are read live alongside the
+SLA data on every call, so they can't go stale between registration and a
+breach firing days later. `team` now resolves via `account.cre_team_id`
+joined to `"group"` (added alongside `ProjectOnboardingStatus`/
+`IsEvaluationAccount` below — was previously always empty on this data
+source, since nothing in this schema resolved a case to a team before this).
+
+**`ProjectOnboardingStatus`/`IsEvaluationAccount` exist purely for
+`csm-notification-service`'s own SLA breach-alert Chat-audience routing** —
+the same team/onboarding/evaluation facts that service's own
+`internal/chataudience.Resolve` uses to route its Chat alerts, per explicit
+product direction: only SLA breach and (eventually) a
+customer-frustration-detector alert route by real per-team/audience
+resolution this way — `case.created`/`case.acknowledged`/
+`case.severity_changed` all route to a single fixed
+`chataudience.IncidentMonitor` audience instead, with no team detection at
+all, and `incident.created` has no Chat reaction. `ProjectOnboardingStatus`
+is `project.onboarding_status`'s raw enum label (e.g. `"IN_PROGRESS"`), `""`
+when the work item has no project or the column is unset.
+`IsEvaluationAccount` is true when the project's `project_type` matches the
+fixed `evaluationSubscriptionProjectTypeName` ("Evaluation Subscription",
+matched by name — see that constant's own doc comment for why not a
+hardcoded id). Both are resolved via `LEFT JOIN`s added to
+`activeSLAStatusFromJoins` (`account`/`"group"` for `team`,
+`project`/`project_type` for the other two) — best-effort display/routing
+enrichment, not part of the SLA clock itself; a work item with no
+project/account simply reports the zero value for each.
+
+## CSM-native SLA clock engine
+
+`internal/service/sla_engine_service.go` (`SLAEngineService`) is what actually
+keeps the `sla` table populated for a case-like work item this deployment
+creates itself — real, durable `source='CSM'` rows, not a value ServiceNow's
+own sync computes. This exists specifically for the dual-write pilot (and,
+in principle, any future pure-Postgres mode): a case created there has no
+ServiceNow-synced `sla` row of its own to read `GET /sla-status` from, so
+without this engine it would simply never get SLA tracking at all,
+regardless of severity.
+
+- **Durations come from the real, ServiceNow-synced `sla_policy` table**
+  (`internal/service/sla_policy_resolver.go`), not a hardcoded map — the
+  now-deleted `sla_clocks` design's old approach (see "SLA status" above for
+  that history). `resolve` looks up `"<P0-P3|Query> - <Response|Workaround|
+  Resolution> (<Managed Services|Open Source>)"` by exact name, falling back
+  to the other plan label, then a loose pattern match — see its own doc
+  comment for why (in short: `resolveCasePlan`'s plan guess is a weak
+  heuristic with no reliable underlying signal, and P0 policies only exist
+  under "Managed Services" in ServiceNow's own real data, so a P0 case whose
+  plan guesses "Open Source" must still find them). **P0 (Catastrophic) had
+  no ServiceNow-synced policy at all** — migration `0136_csm_p0_sla_policies.sql`
+  seeds it directly, `source='CSM'`, durations mirroring the old deleted
+  `sla_clocks` map's own P0 entries and WSO2's published [support
+  policy](https://wso2.com/licenses/support-policy/6.0): Response 15m,
+  Workaround 4h, Resolution 48h.
+- **`internal/repository/sla_engine_repo.go`'s `RecomputeActive`** is what
+  actually advances `business_elapsed_percentage` for these rows over time —
+  flat wall-clock time since `start_on` (`(NOW() - start_on) / duration *
+  100`), no business-hours calendar, same crudeness the old deleted design
+  had. Run by `SLAEngineRecomputeWorker` (`sla_engine_recompute_worker.go`)
+  on its own ticker, default 45s — frequent enough that a 50/75/100%
+  crossing is visible well within `csm-notification-service`'s own
+  `SLA_TICK_INTERVAL` poll cadence.
+- **`RegisterCaseClocks`/`ReviseCaseClocks`/`CompleteResponseClock`/
+  `ApplyCaseStateEffects`** are all called directly, in-process, from
+  `snCaseService`'s own case-lifecycle hooks (create/severity-change/
+  qualifying-comment/state-change) — best-effort, same "must never fail the
+  actual mutation" reasoning `publishCaseCreatedEvent` follows.
+- **A real, fixed bug: SLA clock registration must run only after this
+  case's Postgres `work_item` row actually exists.** `sla.work_item_id` has
+  a hard, non-deferrable foreign key on `work_item(id)` (migration `0048`).
+  `snCaseService.CreateCase` calls `registerCaseSLAClocks` right after its
+  own ServiceNow POST succeeds — fine for plain `DATA_SOURCE=servicenow`,
+  since that path has no Postgres insert of its own to wait for at all. But
+  in dual-write mode, `caseService.createCaseSNFirst` reaches
+  `snCaseService.CreateCase` *as its mirror*, calling it **before**
+  `caseService`'s own `CreateCaseFromServiceNow` insert — so every
+  dual-write case creation tried to insert an `sla` row referencing a
+  `work_item_id` that didn't exist yet, failing with a foreign-key violation
+  (`SQLSTATE 23503`), logged (`"sla engine: register clock failed"`) and
+  silently dropped (best-effort, never retried, never surfaced) — meaning no
+  SLA breach alert ever fired for any dual-write-created case. Fixed the
+  same way this exact problem was already solved for the `case.created`
+  publish (see `publishCaseCreatedEvent`'s own doc comment): `routes.go`
+  constructs `snCaseMirrorSvc` with a **nil `slaEngine`**, so its own
+  embedded registration call is a no-op when reached via the mirror path
+  (mirroring its existing nil `publisher`), and `caseService` registers the
+  clocks itself — `registerCaseSLAClocksEvent` (`sn_case_service.go`,
+  factored out the same way `publishCaseCreatedEvent` was) — right after its
+  own insert succeeds. Any future change that gives `snCaseMirrorSvc` a
+  non-nil `slaEngine` again, or that adds another consumer of
+  `snCaseService.CreateCase` as a mirror/pass-through, needs the same
+  "does the referenced Postgres row exist yet at this call site"
+  check — see `TestCaseService_CreateCase_RegistersSLAClocksOnlyAfterPostgresSucceeds`
+  for the regression test.
+- **The same "wired into `snCaseService` only" gap existed for every other
+  `SLAEngineService` hook too, not just registration — all now fixed in
+  `caseService` directly.** `snCaseService.applyResponseSLAOnComment`/
+  `applyCaseStateSLAEffects`/`reviseCaseSLAClocks` are the plain-ServiceNow-
+  mode's own hooks; `caseService.createCaseCommentAs`/`UpdateCase` (the
+  active, Postgres-primary path in dual-write mode) had no equivalents at
+  all — a support engineer's reply never completed the response clock, no
+  state transition ever paused/resumed/completed workaround or resolution,
+  and no severity change ever revised a case's clocks, for any dual-write
+  case, full stop. Each is now its own hook on `caseService`:
+  - **`completeResponseSLAOnComment`** (`createCaseCommentAs`) — gated on
+    the same `CSEngineerRole` (`CS_ENGINEER_ROLE`) config
+    `snCaseService.applyResponseSLAOnComment` already uses, shared rather
+    than duplicated: "CS engineer" and "support engineer" are the same
+    real-world role, just checked against a different role vocabulary here
+    (`repository.UserRepository.GetUserRoles`, Postgres' own `user_role`
+    table) than `snCaseService`'s own lookup. Resolves the
+    comment author via `userRepo.GetUserByEmail` then `GetUserRoles` —
+    tolerates both failing (the M2M `CreateCaseCommentAs` path has no
+    guaranteed user row, per that method's own doc comment) by skipping,
+    the same "can't confirm, skip" posture `CSEngineerRole` itself uses
+    when unconfigured.
+  - **`ApplyCaseStateEffects`** (`UpdateCase`) — fires unconditionally
+    whenever `req.State != nil`, not gated on a genuine change, matching
+    `snCaseService`'s own call site exactly: every effect it applies is
+    idempotent, so a no-op re-PATCH just harmlessly re-applies the same
+    effect.
+  - **`ReviseCaseClocks`** (`UpdateCase`) — gated on a genuine severity
+    change (unlike the state hook above), reusing the same `GetCaseByID`
+    fetch the `case.severity_changed` publish already does, rather than a
+    second round trip.
+- **The workaround clock could never actually complete, on either code
+  path, until now — a separate, previously-accepted gap this also
+  closes.** `ApplyCaseStateEffects` only ever pauses/resumes the workaround
+  clock (even on close, per its own doc comment — there was no "workaround
+  provided" signal wired into it). `WorkaroundProvided` (a real field on
+  `UpdateCaseRequest`/`CaseView`, the "Provide Workaround" action) is the
+  one genuine such signal that exists anywhere in the domain model, and
+  it simply wasn't connected to the SLA engine at all. `SLAEngineService`
+  now has its own `CompleteWorkaroundClock`, called from both `caseService.
+  updateCaseFields` and `snCaseService.UpdateCase` whenever
+  `WorkaroundProvided` is set to `true` — `false` (a recall) deliberately
+  does **not** reopen a completed clock; `SLAEngineRepository` has no
+  "uncomplete" operation, and a recall is rare enough that this stays a
+  known, accepted gap rather than something built speculatively.
+
+## Customer-reply state transition
+
+Unrelated to SLA tracking above, but lives in the same file and used to be
+documented alongside it: `sn_case_service.go`'s `CreateCaseComment` calls
+`applyCustomerReplyStateTransition` for every comment. When a
 customer-visible comment arrives while the case is `Awaiting Info`/
 `Solution Proposed`, from an author holding one of the configurable
-`CUSTOMER_ROLES` (same role-lookup mechanism as `applyResponseSLAOnComment`,
-just checked against a list instead of a single role — an organisation can
-have more than one customer-facing role), this calls `s.UpdateCase` with
-`State: WaitingOnWSO2` **in-process**, not a second, separate ServiceNow
-PATCH — reusing `UpdateCase`'s own `publishStatusChanged` and
-`applyCaseStateSLAEffects` calls entirely rather than duplicating either.
-`applyCaseStateSLAEffects`'s `default` case (any state other than
-`AwaitingInfo`/`SolutionProposed`/`Closed`) is exactly the resume behavior
-this needs, so no new SLA-specific code was needed for that part at all.
+`CUSTOMER_ROLES` env var (comma-separated ServiceNow role names,
+deliberately no committed default — organisation-specific vocabulary, same
+reasoning `apps/csm-portal/backend`'s own `CSM_TEAM_REGISTRY` uses; resolved
+the same way as every other author-role check in this file, since this
+service has no auth/identity layer of its own and the `x-user-id-token` it
+forwards is opaque), this calls `s.UpdateCase` with `State: WaitingOnWSO2`
+**in-process**, not a second, separate ServiceNow PATCH — reusing
+`UpdateCase`'s own `publishStatusChanged` call rather than duplicating it.
 Requires its own `GetCaseByID` call to read the case's current state —
 nothing else in `CreateCaseComment`'s flow surfaces it (`publishCommentAdded`
 fetches one for its own purpose but never shares it, and is itself skipped
@@ -590,29 +1675,28 @@ here.
 
 ## Scheduled task runs
 
-`scheduled_task_run` (migration `000045`, `internal/domain/entity.go`'s
+`scheduled_task_run` (migration `0108`, `internal/domain/entity.go`'s
 `ScheduledTaskRun`, `internal/repository/scheduled_task_run_repo.go`,
 `internal/service/scheduled_task_run_service.go`) is durable claim/retry
 state for `operations/csm-scheduled-tasks` — a single Choreo Scheduled Task
 that internally fans out to any number of independently-scheduled sub-crons
-on one shared driver cadence. Like `sla_clocks`/`event_publish_failures`, it
-has no ServiceNow equivalent and is always backed by Postgres regardless of
+on one shared driver cadence. Like `event_publish_failures`, it has no
+ServiceNow equivalent and is always backed by Postgres regardless of
 `DATA_SOURCE`.
 
-`taskName` is a caller-defined registry key, not a fixed enum — same
-reasoning as `sla_clocks.clockType`: which sub-crons exist, and on what
-schedule, is a policy decision made entirely by `operations/csm-scheduled-tasks`'
-own registry, not something this service tracks.
+`taskName` is a caller-defined registry key, not a fixed enum: which
+sub-crons exist, and on what schedule, is a policy decision made entirely by
+`operations/csm-scheduled-tasks`' own registry, not something this service
+tracks.
 
-There is no stored status column, the same choice `sla_clocks` makes for the
-same reason: status is always derivable from which timestamp is set, and
-each is independently useful on its own — `succeededOn` (done, forever, for
-this period), `supersededOn` (abandoned: the next period came due before
-this one ever succeeded), or `nextRetryOn` (eligible for another attempt
-once it's in the past). See `operations/csm-scheduled-tasks`'s own
-`CLAUDE.md` for the full design behind "period keys" and "supersede" — this
-service only stores the result of that design, it does not compute period
-keys or decide backoff itself, the same division of labor as `sla_clocks`.
+There is no stored status column: status is always derivable from which
+timestamp is set, and each is independently useful on its own —
+`succeededOn` (done, forever, for this period), `supersededOn` (abandoned:
+the next period came due before this one ever succeeded), or `nextRetryOn`
+(eligible for another attempt once it's in the past). See
+`operations/csm-scheduled-tasks`'s own `CLAUDE.md` for the full design
+behind "period keys" and "supersede" — this service only stores the result
+of that design, it does not compute period keys or decide backoff itself.
 
 Exposed at:
 
@@ -674,8 +1758,8 @@ Exposed at:
 
 ## Comment, product vulnerability, and time-card Postgres support
 
-`comment` (migration 000037), `product_vulnerability` (migration 000034),
-and `time_card`/`time_card_approver` (migration 000039) had tables from the
+`comment` (migration 0040), `product_vulnerability` (migration 0038),
+and `time_card`/`time_card_approver` (migration 0041) had tables from the
 start but no repository/service ever queried them — every route backed by
 these entities (`/comments*`, `/products/vulnerabilities/*`, `/time-cards/*`,
 `/cases/time-cards/search`) was ServiceNow-only regardless of
@@ -701,7 +1785,7 @@ already use — no route path, request, or response shape changed.
   `GetCaseByID`/`SearchCases` have matched all five case-like types since
   "Case-like work_item types" landed — this file was simply never updated to
   match. `"deployment"` has no entry:
-  `deployment` (migration 000013) is its own standalone table with its own
+  `deployment` (migration 0018) is its own standalone table with its own
   primary key space, not a work_item subtype, so `CreateComment`/
   `SearchComments` reject it with a `ValidationError` before any query runs.
   `CreateComment` also refuses to write `CommentTypeActivity`
@@ -713,7 +1797,25 @@ already use — no route path, request, or response shape changed.
   string, which can be a non-user integration account) — the Postgres path
   writes the caller's resolved email into it, the same identity mechanism
   `caseService.CreateCaseComment` uses (`x-user-id-token` → `emailFromJWT` →
-  `UserRepository.GetUserByEmail`).
+  `UserRepository.GetUserByEmail`). **`SearchComments` now also resolves a
+  display name for that email**, via the same `LEFT JOIN "user" ON
+  LOWER(email) = LOWER(created_by)` (wrapped in its own `DISTINCT ON`
+  subquery — email has no unique constraint) that `SearchCaseActivities`'s
+  own comment branch already used — found live as a real, visible bug: a
+  case's comment bubbles showed the commenter's raw email while that same
+  case's Lifecycle/Attachment entries, on the sibling `/activities/search`
+  endpoint, already showed a resolved name for the identical author, because
+  only that second endpoint ever did the join. `CommentRow.CreatedByName`
+  (`comment_repo.go`) is `""` for an address with no matching `"user"` row
+  (an integration/automation account like `github_pipeline` — a real,
+  legitimate case, not an error) — `commentRowToDomain` passes it through as
+  the `UserReference.Name`, and the webapp's own `authorDisplayName` already
+  falls back to the email whenever `Name` is empty, so this needed no
+  webapp change at all, only entity-service. `CreateComment`'s own
+  echoed-back response (`CaseCommentDetail.CreatedBy`) is a plain email
+  string with no name field on its wire contract at all — deliberately left
+  as-is; the webapp only reads a comment's display name from `SearchComments`
+  once the list is (re)fetched, never from the create response.
 - **Product vulnerabilities**: `SearchProductVulnerabilities`/
   `GetProductVulnerability`/`GetVulnerabilityMeta` are read-only queries
   against `product_vulnerability`, which mirrors ServiceNow's own
@@ -773,7 +1875,7 @@ following the same "SN branch vs. Postgres branch, same service interface"
 pattern as the section above — no route path, request, or response shape
 changed.
 
-- **Case tags** (`tag`/`work_item_tag`, migration 000021): `CaseService.
+- **Case tags** (`tag`/`work_item_tag`, migration 0026): `CaseService.
   AddCaseTag`/`RemoveCaseTag`/`SearchTags` in `case_service.go` were a
   detection-only stub that always returned 503 — see
   `detectPatchTagBillableOverride`'s own doc comment for that history — and
@@ -786,7 +1888,7 @@ changed.
   (a) it was blocked on (case tags having real storage) is now true, but
   condition (b) (a consumer for `events.TypeCaseBillableStatusChanged`)
   still doesn't exist.
-- **Case watch list** (`work_item_watcher`, migration 000040):
+- **Case watch list** (`work_item_watcher`, migration 0042):
   `UpdateCase`'s `WatchList` field, previously rejected outright on this
   data source, now has its own branch (`updateCaseWatchList`) — split out
   with an early return specifically so it can't disturb the pre-existing
@@ -805,7 +1907,46 @@ changed.
   (`domain.NewUserReference("", ...)`), never the watcher's own resolved id
   — `WatchListUser.User`'s own doc comment requires that field to stay null
   regardless of whether this data source happens to know it.
-- **Account contacts** (`account_contact`, migration 000020) and **project
+
+  **A new case always gets no watchers at all on the SN-first create
+  path.** `CreateCaseFromServiceNow`'s insert only ever writes `work_item`/
+  the type-specific extension table — never `work_item_watcher` — so every
+  Postgres-sourced read of a freshly created case (`GetCaseByID`,
+  `SearchCases`) showed no watchers, and `publishCaseCreatedEvent`'s own
+  `Recipients` (built from a `GetCaseByID` call) went out to nobody. An
+  earlier revision of this fix mirrored `req.WatchList` (whatever the
+  caller sent, forwarded to ServiceNow via `s.snMirror.CreateCase`) into
+  `work_item_watcher` — deliberately replaced: that design still routed the
+  default watch list through ServiceNow-shaped concepts (email vs. UUID
+  resolution, `userRepo.GetUserByEmail` lookups) for something this schema
+  can answer directly.
+
+  **Every case now gets its account's four named stakeholders as watchers,
+  unconditionally, from a pure Postgres lookup — no ServiceNow involved.**
+  `account.technical_owner_id`/`secondary_technical_owner_id`/
+  `account_manager_id`/`renewal_account_manager_id` (migration 0012)
+  are already `"user"` ids, so there's no email/UUID ambiguity to resolve
+  at all. `customer_success_manager_id` is deliberately excluded — unlike
+  the other four, the CSM is not meant to receive these default case
+  notifications (an earlier version of this lookup wrongly included it and
+  omitted `renewal_account_manager_id`; fixed at explicit request).
+  `createCaseSNFirst` calls `addAccountDefaultWatchers` right after
+  `CreateCaseFromServiceNow` succeeds and before `publishCaseCreatedEvent`;
+  it resolves those four ids for the case's project via
+  `CaseRepository.AccountDefaultWatcherIDs` (a `project JOIN account`,
+  whichever of the four are set, deduplicated) and writes them with the
+  same `CaseRepository.SetCaseWatchList` the `UpdateCase` branch above
+  already uses. A project with no linked account, or an account with none
+  of the four roles set, is a normal state (an empty slice, `SetCaseWatchList`
+  never called) — not an error. A repository failure here is logged, not
+  returned: ServiceNow already has the case by this point, so a missing
+  default watch list must not be reported as a failed create, same posture
+  as every other post-ServiceNow-success step in this file (event
+  publishing included). `req.WatchList` itself is unaffected by any of
+  this — it's still forwarded to ServiceNow as part of the create request
+  the normal way; this addition is purely about what the Postgres mirror
+  also guarantees.
+- **Account contacts** (`account_contact`, migration 0026) and **project
   contacts** (`project_contact` + `project_contact_group`/`project_group`/
   `project_group_role`/`project_role`, migrations 000022-000025): new
   `AccountContactService`/`ProjectContactService` Postgres implementations.
@@ -817,11 +1958,14 @@ changed.
   or the invited `email` (project contacts, matching
   `domain.ProjectContact.Email`'s own documented fallback). A project
   contact's `Roles` is the union of `project_role.role` across every
-  `project_group` it belongs to via `project_contact_group`.
+  `project_group` it belongs to via `project_contact_group` — which now
+  includes `ADMIN`, since admin is a project role (see "Portal-driven
+  membership writes" above); `AccountRoles` is the separate account-level list
+  described in that same section.
   `NotificationsEnabled` has no backing column anywhere in this schema and
   is hardcoded `true` (see `projectContactRowToDomain`'s own comment) —
   flagged as a known gap, not fabricated data pretending to be real.
-- **User roles** (`role`/`user_role`, migrations 000004/000006):
+- **User roles** (`role`/`user_role`, migrations 0008/0010):
   `SearchUsersFilters.RoleIDs` (holds role **names**, e.g. `"admin"`,
   despite the field's name — see `domain.UserRole`'s own doc comment) was
   previously rejected outright on Postgres; `user_repo.go`'s `SearchUsers`
@@ -830,7 +1974,7 @@ changed.
   empty — nothing has asked for it on that path, this only wires up the
   search filter.
 - **Case activities** (`CaseRepository.SearchCaseActivities`): merges
-  `comment` and complete `case_attachments` rows into one newest-first feed
+  `comment` and complete `case_attachment` rows into one newest-first feed
   via a `UNION ALL` CTE — was previously an unconditional
   `ServiceUnavailableError` stub. There is no field-change audit table in
   this schema, so `req.IncludeFieldChanges` has no effect on this data
@@ -841,7 +1985,7 @@ changed.
   as the Event Hub section above); a caller resolves the actual bytes via
   `GET /attachments/{id}/content`. The comment branch's `"user"` join is by
   email (`comment.created_by` is a free-text VARCHAR, not a FK), and
-  `"user".email` has no unique constraint (migration 000001 only makes
+  `"user".email` has no unique constraint (migration 0002 only makes
   `user_name` UNIQUE) — so that join is wrapped in its own `DISTINCT ON
   (cm.id)` subquery to guarantee one activity row per comment even if two
   user rows share an address. Without it, a shared address would fan one
@@ -852,7 +1996,7 @@ changed.
 **Pre-existing bug fixed as a side effect, not scope creep**: `user_repo.go`
 queried a `users` table with `created_at`/`updated_at`/`phone`/`timezone`
 columns that do not exist anywhere in `migrations/` — the real table is
-`"user"` (migration 000001) with `created_on`/`updated_on` and no
+`"user"` (migration 0002) with `created_on`/`updated_on` and no
 `phone`/`timezone` column at all. Every identity-resolution call this
 service makes (`GetUserByEmail`, used by `CreateCaseComment`, `AddCaseTag`/
 `RemoveCaseTag`/`SearchTags`, `SetCaseWatchList`, `CreateTimeCard`/
@@ -874,9 +2018,134 @@ helper: decodes `x-user-id-token`'s `email` claim without a `"user"` table
 lookup, since nothing on these paths needs the caller's platform id today,
 only their claimed email.
 
+## PATCH /cases/{id}: assignee, acknowledge, parent, and the combinable field bundle
+
+Found live: assigning a case ("Assign to me") and acknowledging one both
+400'd on this data source with a generic "Invalid request payload." (the
+CSM/customer portal backend's own catch-all for any upstream 400) --
+`AssigneeEmail` and `Acknowledge` were on `UpdateCase`'s unconditional
+"only supported for the ServiceNow data source" rejection list even though
+neither actually needs anything ServiceNow-specific: `work_item.
+assigned_to_id` (migration 0039) and `work_item.acknowledged_by_user_id`
+(migration 0021) are both real, direct columns, already read elsewhere
+(`assignedUserId` search filter, `GetCaseByID`'s own `AssignedEngineer`).
+Prompted by that bug report, this pass re-derived `UpdateCase`'s *entire*
+field-combination contract from `sn_case_service.go`'s own UpdateCase --
+the actual, currently-enforced source of truth for which fields may be
+combined -- rather than re-guessing it, since the Postgres and ServiceNow
+data sources must accept the same PATCH shapes.
+
+**The exclusive/combinable split now mirrors ServiceNow's exactly**, down to
+the variable names (`exclusiveCount`/`combinableCount` in both files' own
+`UpdateCase`):
+- **Exclusive** (at most one per request, and none may be combined with
+  anything else, including each other): `state`/`severity`/`workState` (one
+  of the three), `watchList`, `assigneeEmail`, `parentId`, `acknowledge`.
+  `parentId` joins this group for the first time here -- it was previously
+  rejected outright; `work_item.parent_id` (migration 0039) is the same
+  self-reference `GetCaseByID`'s own `ParentCase` already reads the other
+  direction, so `updateCaseParent`/`CaseRepository.UpdateCaseParent` wire it
+  up the same way `updateCaseAssignee` does.
+- **Combinable** (any subset, freely combined with each other, never with
+  the exclusive group): `subject`, `description`, `deploymentId`,
+  `deployedProductId`, `bestCaseFixEta`/`mostLikelyFixEta`/`worstCaseFixEta`,
+  `relatedCaseId`, `workaroundProvided` -- all newly wired up via
+  `updateCaseFields`/`CaseRepository.UpdateCaseFields`, one dynamic
+  `UPDATE ... SET` per table (`work_item` for most of these,
+  `"case"` for `relatedCaseId` alone) built from exactly the non-nil pointers
+  `req` carries. `UpdatedCase` only has an echo slot for the fix-ETA trio
+  (see each field's own doc comment, "Present only when the update set X");
+  every other field in this bundle follows ServiceNow's own "a plain field
+  write only returns `{id, updatedOn, updatedBy}`" contract -- the caller
+  re-reads via `GetCaseByID` to see the new value.
+- **`resolutionCode`/`cause`/`closeNotes` are deliberately NOT in either
+  group above.** `sn_case_service.go`'s own UpdateCase only allows them
+  alongside a `state` transition, and only to `closed` or
+  `solution_proposed` (`snResolutionStates`) -- so they ride inside the
+  existing `state`/`severity`/`workState` branch's own `"case"` `UPDATE`
+  (`updateCaseQuery`'s new `$5`/`$6`/`$7`), gated by the identical
+  restriction, rather than living in the free-standing combinable bundle.
+  `closeNotes` uses `COALESCE($7, close_notes)` rather than the other five
+  columns' `''`-sentinel trick, since `""` is itself a meaningful value to
+  write there (clearing existing notes), unlike an enum column where `''` is
+  never valid anyway.
+- **`issueType`/`engagementType`/`engagementPaymentType`/`catalogId`/
+  `catalogItemId`/`variables` stay rejected**, for the mirror-image reason:
+  `sn_case_service.go` only accepts them when `type` is also provided (a
+  full type transfer) -- `"engagementType, engagementPaymentType, issueType,
+  catalogId, catalogItemId, and variables are only allowed when type is also
+  provided"`. `type` itself has no Postgres implementation (a real type
+  transfer would mean moving a row between `"case"`/`engagement`/
+  `service_request`/etc, each a physically separate extension table --
+  genuinely larger, separate work, not attempted here), so none of its five
+  companions have anywhere to go either. `addPublicComment`/`product`/
+  `publicTicket` (the "Share Fix ETA" comment-posting side effect) and
+  `autocloseHoldUntil` (no backing column anywhere in this schema) remain
+  rejected too.
+
+**A real pre-existing read-side bug found while building the write side**:
+`GetCaseByID` cast `"case".resolution_code` straight into
+`domain.CaseResolutionCode` with no translation at all
+(`domain.CaseResolutionCode(*resolutionCode)`), but three of the sixteen
+`case_resolution_code_enum` labels don't match their domain constant by
+identity -- `CONSIDERED_FOR_ROADMAP_ALT`/`SOLVED_WORKAROUND_PROVIDED_ALT`
+are ServiceNow's own duplicate picklist entries for a concept the Postgres
+enum only has one canonical label for, and
+`AbruptlyClosedDueToNonResponsiveness` is missing the enum's own
+`_THROUGH_AUTO_CLOSURE` suffix. Every case resolved with that last code
+rendered a `resolutionCode` value no `domain.CaseResolutionCode` constant
+declares. `caseResolutionCodeToEnum`/`caseResolutionCodeFromEnum`
+(`case_repo.go`, next to `caseSeverityToEnum`'s own identical-shaped fix)
+hold the mapping both directions now, same "flag the mismatch explicitly
+rather than guess" precedent as severity's own S0..S4 mapping.
+
+**The SN-mirror-writeback pattern was extended to match**, so
+`DATA_SOURCE=postgres-servicenow-dual-write` doesn't drift on these fields
+either: `patchCaseAssignee`/`patchCaseAcknowledge`/`patchCaseParent`/
+`patchCaseFieldsBundle` (`sn_case_service.go`) are bare ServiceNow PATCHes
+with none of `UpdateCase`'s own enrichment reads or no-op detection --
+exactly `patchCaseFields`/`patchCaseWatchList`'s own established shape,
+reached through four new narrow interfaces
+(`snAssigneePatcher`/`snAcknowledgePatcher`/`snParentPatcher`/
+`snFieldsBundlePatcher`). The acknowledge mirror only fires when this call's
+own claim actually succeeded (`!alreadyAcknowledged`) -- a repeat
+`Acknowledge:true` against an already-acknowledged case changed nothing in
+Postgres, so there's nothing new to mirror.
+
+**`patchCaseFieldsBundle` mirrors only four of the nine combinable
+fields.** `snUpdateCasePayload`'s own field comments say
+`Title`/`Description`/`DeploymentID`/`DeployedProductID`/`RelatedCaseID`
+are each "not yet available in the backing service" -- a first version of
+this mirror sent them anyway (Subject onto the payload's `Title`,
+`DeploymentID`/`DeployedProductID`/`RelatedCaseID` converted to sysids),
+which a CodeRabbit review on PR #1986 caught: sending a field the backing
+service doesn't implement either gets silently ignored or fails the whole
+PATCH, neither of which leaves ServiceNow any better synced than not
+mirroring it. Only `BestCaseFixEta`/`MostLikelyFixEta`/`WorstCaseFixEta`/
+`WorkaroundProvided` are confirmed available (their own doc comments say
+so) and actually forwarded; the function returns `nil` without a PATCH
+call at all when a request sets none of those four, rather than sending an
+empty no-op. All nine fields still write to Postgres via
+`CaseRepository.UpdateCaseFields` regardless -- this only narrows what the
+*ServiceNow mirror* attempts. The `sn_writeback_failures` payload for this
+branch (`updateCaseFields`'s own `Dispatch` call) records the actual values
+of those same four fields, not a fixed field-name placeholder, so a failed
+mirror can actually be replayed by hand.
+
+**`resolutionCode`/`cause`/`closeNotes`'s state-gating check runs before
+the branch dispatch, not after.** The same CodeRabbit review caught that
+neither `exclusiveCount` nor `combinableCount` counts these three fields at
+all, so a request like `{assigneeEmail, resolutionCode}` or `{subject,
+closeNotes}` used to sail past the mutual-exclusion check, get dispatched
+to `updateCaseAssignee`/`updateCaseFields`, and return 200 with the
+resolution fields silently ignored -- never validated, never written. The
+check now runs immediately after the `exclusiveCount`/`combinableCount`
+validation and before any branch (`WatchList`/`AssigneeEmail`/`ParentID`/
+`Acknowledge`/the combinable bundle) gets a chance to return early.
+
 ## Change requests
 
-`change_request` (migration 000047) is a shared-PK extension of `work_item`,
+`change_request` (migration 0043) is a shared-PK extension of `work_item`,
 same pattern as `"case"` (`change_request.id` IS `work_item.id`). `SearchChangeRequests`,
 `AggregateChangeRequests`, `GetChangeRequest`, and `PatchChangeRequest` are
 wired up to it (`change_request_repo.go`/`change_request_service.go`).
@@ -914,9 +2183,9 @@ v5 can't scan a binary-format timestamptz into a `*string`
   without a schema change, so both always return a `ServiceUnavailableError`
   on Postgres.
 
-**`ServiceID`/`ServiceOfferingID` are now wired up** (migration 000050 added
+**`ServiceID`/`ServiceOfferingID` are now wired up** (migration 0046 added
 `change_request.service_id`/`service_offering_id`, FKs into `service`/
-`service_offering`, migrations 000048/000049): readable via
+`service_offering`, migrations 0044/0045): readable via
 `SearchChangeRequestView.Service`/`ServiceOffering` and writable via
 `PatchChangeRequestRequest.ServiceID`/`ServiceOfferingID`. `service`/
 `service_offering` also got their own Postgres implementations
@@ -930,11 +2199,111 @@ tables exist in this schema at all); `Type`
 (`domain.ChangeRequestType` — standard/normal/emergency/... — has **no**
 relationship to `change_request.change_request_type`, whose real enum
 values are `INFRA`/`GENERAL`, a completely different classification, not a
-subset of the domain enum); `ApprovedBy`/`ApprovedOn`/`LegalNextStates` on
-`domain.ChangeRequest` (no approver/date columns for the first two;
-`LegalNextStates` is a ServiceNow workflow-engine computation with nothing
-to derive it from here). `Duration` (`cr.calendar_duration`, an `INTERVAL`)
-is also left unset — no confirmed display format to render it in.
+subset of the domain enum); `ApprovedBy`/`ApprovedOn` on
+`domain.ChangeRequest` (no approver/date columns exist). `Duration`
+(`cr.calendar_duration`, an `INTERVAL`) is also left unset — no confirmed
+display format to render it in.
+
+**`LegalNextStates` used to be on the list above too ("a ServiceNow
+workflow-engine computation with nothing to derive it from here") — it no
+longer is.** Its absence on this data source was reported live: a change
+request could be created (`DATA_SOURCE=postgres-servicenow-dual-write` is
+ServiceNow-first on create), but the CSM Portal's own lifecycle action bar
+(`ChangeRequestActionBar.tsx`) renders nothing at all when
+`legalNextStates` is empty — the reported symptom was "create works, but no
+way to promote it," for every change request on this data source, not just
+one. `changeRequestForwardNextStates`/`legalChangeRequestNextStates`
+(`change_request_repo.go`) now compute it: a forward-only graph
+(New→Assess→Authorize→{Scheduled, Customer Approval}→Implement→
+Review→{Closed, Customer Review}→Closed). Every edge except
+`CustomerApproval`'s and `CustomerReview`'s own outgoing move (see below)
+was read directly off a real change request sitting in that exact state
+on the live ServiceNow instance (its own `state` field's dropdown, which
+ServiceNow itself only ever populates with the choices it currently
+considers legal) — confirmed, not guessed. `"canceled"` is additionally
+offered alongside the forward move(s) from every non-terminal state, since
+the Cancel Change action was observed available on every reachable state.
+`Rollback`/`Closed`/`Canceled`
+return `nil` (terminal, no legal forward move), matching ServiceNow's own
+answer for a record with none.
+
+**Authorize and Review each have two confirmed forward moves, not one —
+found the hard way.** A first revision of this map picked a single "common
+case" edge for each (Authorize→Scheduled, Review→Closed), reasoning that
+`domain.ChangeRequest.HasCustomerApproved`/`HasCustomerReviewed`
+(`change_request.customer_approval`/`customer_review`) record whether the
+customer **has already** signed off, not whether a given change request
+**requires** that gate, so they can't be used to decide the branch — true,
+but it was resting on an unverified assumption that one branch was simply
+the common case. Checking several more real records directly disproved
+that: two Authorize-state records with no other visible difference in the
+fields this schema exposes (same type, both approval/review booleans
+false) had dropdowns offering `Scheduled` on one and `Customer Approval` on
+the other — and the identical split was found for Review (`Closed` on one
+record, `Customer Review` on another, again with no discriminating field
+found). Whatever ServiceNow actually keys this decision on is not visible
+anywhere in this schema, so both confirmed branches are now offered for
+each of these two states rather than guessing which one applies to a given
+record. This means an engineer can be offered an action ServiceNow's own
+workflow would consider illegal for that specific record — an accepted
+risk here, matching `PatchChangeRequest`'s own pre-existing lack of a
+legal-transition check on this data source (any enum value is accepted and
+written directly; this map doesn't change that) — the offered action still
+gets ServiceNow's own real rejection reason back on the attempt
+(`mapUpstreamError` surfaces it) rather than silently succeeding wrong.
+Revisit if the real gating field is ever identified.
+
+**This risk only actually reaches an engineer for the Review branch.** The
+webapp's own `ChangeRequestActionBar.tsx` hardcodes `"customer_approval"`
+into its `NEVER_OFFERED_TARGETS` list — reached only by ServiceNow's own
+approval process, never human-enterable there, per that list's own doc
+comment — and filters it out unconditionally regardless of what
+`legalNextStates` returns, so Authorize's `Customer Approval` entry is
+accurate data that never becomes a clickable button. `"customer_review"`
+carries no such exclusion, so Review's `Customer Review` entry does render
+as a real, selectable action.
+
+`CustomerApproval`/`CustomerReview`'s own **outgoing** edges (what a change
+request already sitting in one of those two states advances to) are a
+separate, smaller gap: no real change request was found sitting in either
+state despite specifically checking, so both are inferred by sequence
+position (`CustomerApproval` precedes `Scheduled`; `CustomerReview`
+precedes `Closed`) rather than confirmed live.
+
+**Change request creation now always sets `state = 'NEW'` explicitly** —
+`createChangeRequestFromServiceNowQuery` previously left `change_request.state`
+unset entirely (the column has no `NOT NULL`/`DEFAULT`), reasoned at the
+time as: ServiceNow's own create response carries no state field to
+confirm what its workflow engine actually assigned, so writing
+`req.State` straight through risked recording a value ServiceNow silently
+overrode. That reasoning was sound but produced a worse bug, reported
+live: a freshly created change request had `state = NULL`, and
+`legalChangeRequestNextStates(nil)` returns `nil` — so a brand new change
+request offered no promote action whatsoever, not even the one every
+change request always starts with. The org's own Change Management
+process flow resolves the original uncertainty directly: every change
+request begins at New unconditionally, with no branch or caller input that
+changes that — so `'NEW'` is not a guess at what ServiceNow decided, it is
+the one value ServiceNow's real workflow always assigns on create.
+`CreateChangeRequestRequest.State` is still accepted on the wire (it's
+shared with `PatchChangeRequestRequest`) but has no effect at creation and
+is intentionally ignored by this insert.
+
+**The New→Assess promote action had a second, related bug**: it sends
+`{requestApproval: true}` rather than `{state: "assess"}` (see
+`ChangeRequestActionBar.tsx`/`buildTransitionPatch` on the frontend), and
+`PatchChangeRequest`'s handling of `RequestApproval` only ever recorded
+`change_request.approval = 'REQUESTED'` — it never advanced `state`. Before
+`LegalNextStates` was populated at all, this was unreachable (the button
+never appeared for any state, New included), so the gap was invisible.
+Populating `LegalNextStates` made it reachable for the first time, and it
+became a real, visible dead end: clicking "Request Approval" got a
+successful response, but the record's own state (and therefore its next
+legal action) never left New, so the same button just reappeared.
+`PatchChangeRequest` now also sets `state = 'ASSESS'` when
+`RequestApproval` is true and `req.State` wasn't itself separately
+provided (the frontend only ever sends one or the other, never both, so
+this can't double-write the column).
 
 **Linking happens entirely through `PATCH`, never at creation** —
 `CreateChangeRequestRequest` has no project/case field at all;
@@ -943,7 +2312,7 @@ is also left unset — no confirmed display format to render it in.
 `CaseID` maps to `work_item.parent_id` (`domain.LinkedChangeRequestRef`'s
 own doc comment already describes this as "the reverse of
 `PatchChangeRequestRequest.CaseID`" — confirmed here as the generic
-`work_item.parent_id` self-reference, migration 000036, not case-specific).
+`work_item.parent_id` self-reference, migration 0039, not case-specific).
 Because of this, `SearchChangeRequestView.Project`/`Case` can be empty
 (`EntityRef{}`)/`nil` for a change request that exists but hasn't been
 linked yet — a real, valid state for this schema, not a bug.
@@ -988,7 +2357,7 @@ domain/contract change, only nil-checks in the scan.
 
 `POST /users/search` failed on every call whose results included a user with
 no `first_name` set: `scanUser` scanned `"user".first_name`/`last_name`
-(both nullable, migration 000001) directly into `domain.User`'s required
+(both nullable, migration 0002) directly into `domain.User`'s required
 (non-pointer) `FirstName`/`LastName` string fields — pgx v5 can't scan `NULL`
 into a plain `*string` destination. `email` (also nullable on `"user"`) had
 the same latent bug, not yet hit in production but certain to fail the same
@@ -997,7 +2366,7 @@ way. Fixed by scanning all three into intermediate `*string` vars and
 column fix in this file.
 
 **`user_type` had a casing/mapping bug on top of the same NULL-scan risk**:
-`user_type_enum`'s real labels (migration 000007) are `SYSTEM`/`INTERNAL`/
+`user_type_enum`'s real labels (migration 0011) are `SYSTEM`/`INTERNAL`/
 `EXTERNAL`/`NOT_AVAILABLE`, scanned directly into `domain.UserType` (whose
 values are lowercase `internal`/`customer`/`system`/`external`) with no
 translation at all — never exercised before because `user_type` was
@@ -1006,7 +2375,7 @@ that got fully inspected. `userTypeFromEnum` now maps `EXTERNAL` to
 `UserTypeCustomer` specifically, not `UserTypeExternal` — see
 `UserTypeExternal`'s own doc comment: "the postgres source emits customer,
 ServiceNow emits external" for the same underlying concept (confirmed
-against `recompute_user_type`'s trigger logic, migration 000007: `EXTERNAL`
+against `recompute_user_type`'s trigger logic, migration 0011: `EXTERNAL`
 is derived from `external`/`partner`/`customer`/... roles). `NOT_AVAILABLE`
 (the trigger's fallback for a user with no matching role at all) has no
 domain equivalent and is left `""` — same as a `NULL` `user_type` — rather
@@ -1075,17 +2444,33 @@ product, account, deployment, deployed_product, split across
     issue-type/work-state filter implicitly narrows results to case-type
     rows, since a non-case row's joined `"case"` columns are always `NULL`.
     `EngagementTypes` filters/selects from the separate `engagement` table
-    (`eng.type`, migration 000019) the same way, LEFT joined. `ParentCase`
+    (`eng.type`, migration 0024) the same way, LEFT joined. `ParentCase`
     now resolves its `Type` from the parent's own real `work_item.type`
-    (via `work_item.parent_id`, migration 000036 — a generic self-reference
+    (via `work_item.parent_id`, migration 0039 — a generic self-reference
     across every work_item type, not case-specific) instead of always
     hardcoding `"case"`; `RelatedCase` (`"case".related_case_id`, migration
     000038) is genuinely case-specific, so hardcoding `"case"` there is
     still correct. `account_id` is read directly off `work_item.account_id`
-    (a real, direct column — migration 000016) rather than derived
+    (a real, direct column — migration 0021) rather than derived
     transitively through the project, since work_item has its own.
+
+    **`work_item.account_id` was never populated at create time, on any of
+    the five SN-first create paths.** `CreateCaseFromServiceNow`'s five
+    `create*FromServiceNowQuery` inserts (case/announcement/service_request/
+    engagement/security_report_analysis) all wrote `project_id`/
+    `deployment_id`/`deployed_product_id` but never `account_id` — so a case
+    created on `DATA_SOURCE=postgres-servicenow-dual-write` always showed a
+    blank Account on its overview card, even though its project has one.
+    `CreateCaseRequest` has no `accountId` field for a caller to supply
+    (ServiceNow's own create response doesn't return one either — there was
+    genuinely nothing to write), so every insert now derives it with
+    `(SELECT account_id FROM project WHERE id = $7)`, `$7` being the
+    already-bound `project_id` parameter — no new bind parameter needed. The
+    plain-Postgres-only `CreateCase` (still 503s on `work_item.number` — see
+    "CreateCase and case numbers" below) got the same fix via a `LEFT JOIN
+    project` for consistency, even though it can't be exercised yet.
   - `CreateCaseComment`/`SearchCaseComments`: now target the real
-    generic `comment` table (migration 000037, keyed by `work_item_id`, not
+    generic `comment` table (migration 0040, keyed by `work_item_id`, not
     `case_id`) instead of the nonexistent `case_comments` — sharing the
     same `comment_type_enum` mapping `commentTypeToEnum` in
     `comment_service.go` uses (`caseCommentTypeEnum`/`caseCommentEnumType`
@@ -1121,6 +2506,88 @@ product, account, deployment, deployed_product, split across
     conflict loop — either way, the exact prefix/padding/format needs a
     real answer, not an invented one.
 
+## A freshly created case silently omitted escalationLevel/isEscalated entirely
+
+Found the same way as the project-fields gaps above (HAR diff, this time against case-creation
+traffic): `GET /cases/{id}` genuinely has real Postgres backing and working code for both fields
+(`GetCaseByID` already selects `current_escalation_level`/`is_escalated` and `SearchCases`'
+own escalation filter already treats a NULL row as "not escalated" -- see this file's own
+"escalation (isEmpty / isNotEmpty)" note), but a brand-new case has NULL for both columns
+(case creation sets neither), and the read path passed that NULL straight through as `nil` --
+which `omitempty` then drops from the response entirely, rather than rendering the same
+"never escalated" default ServiceNow's own case response always includes (`escalationLevel:
+{id: "0", label: "EL0"}`, `isEscalated: false`) from the moment a case exists. Fixed by
+defaulting NULL to that same state in `GetCaseByID`, matching the semantic the filter side
+already gives NULL rather than inventing a new one.
+
+## POST /deployments/{id}/products/search dropped product.abbreviation on Postgres
+
+`ProductRef.Abbreviation`'s own doc comment claimed "absent on the Postgres data source, whose
+products table has no equivalent column" -- checked directly against real data and this is
+wrong: `product.code` (migration 0015) holds exactly this value (`"wso2am"` for `"WSO2 API
+Manager"`, `"wso2is"` for `"WSO2 Identity Server"`), the same vocabulary this field's own doc
+comment already describes the product-updates catalogue keying on. `SearchDeployedProducts`
+simply never selected it. Fixed by adding `p.code` to the query and scanning it straight into
+`Product.Abbreviation` (already the correct `*string` type for a nullable column). Doc comment
+corrected to match.
+
+## GET /projects/{id} and POST /projects/search were missing most of a project's own fields
+
+Found by diffing the Postgres and ServiceNow customer-portal responses field-for-field
+(HAR capture comparison) against the real customer-portal-backend-v2 traffic: `GetProjectByID`
+never selected most of `ProjectDetailsView`'s own fields, even though every one of them has a
+real Postgres column (migration 0014) -- `account.ownerEmail`/`technicalOwnerEmail`,
+`closureState`, `onboardingStatus`, `goLivePlanDate`, `onboardingExpiryDate`, and all six
+query/onboarding-hours balances (`totalQueryHours`, `consumedQueryHours`, `remainingQueryHours`,
+`totalOnboardingHours`, `consumedOnboardingHours`, `remainingOnboardingHours`) all came back as
+their zero value regardless of what was actually stored. Fixed by extending `GetProjectByID`'s
+query and scan:
+- `mgr`/`tow` are two new `LEFT JOIN "user"` aliases resolving `account.account_manager_id`/
+  `technical_owner_id` to `.email` -- the same two FKs `account_repo.go`'s own
+  `accountSelectColumns` already resolves for `GET /accounts/{id}`, reused here under the same
+  alias names. `TechnicalOwnerEmail`'s mapping is exact (the column is literally named
+  `technical_owner_id`); `OwnerEmail` is inferred as `account_manager_id` -- the account's other
+  named "owner" role, and the one ServiceNow's own project payload pairs with
+  `technicalOwnerEmail` the same way. Revisit if that pairing turns out to be wrong.
+- `wso2_closure_state`/`onboarding_status`/`onboarding_go_live_date`/`onboarding_go_live_plan_date`/
+  `onboarding_expiry_date` scan straight into `ProjectDetailsView`'s already-pointer fields --
+  no local var needed, same NULL-tolerance as every other optional column here.
+- The six query/onboarding-hours balances are stored as `INTERVAL`, not a plain number;
+  `EXTRACT(EPOCH FROM ...) / 3600.0` converts to hours in SQL (matching
+  `project_case_stats_repo.go`'s existing `EXTRACT(EPOCH ...)` convention for a duration column)
+  and scans directly into the matching `*float64` field -- a NULL interval extracts to a NULL
+  numeric, preserving "not tracked" instead of becoming a fabricated `0`.
+
+`ProjectClosureFields.ClosureState`'s own doc comment used to say "(ServiceNow data source only)"
+-- stale even before this fix, since `project.wso2_closure_state` was always a real column; only
+the query never read it. Corrected to say it's populated on both data sources now.
+
+`POST /projects/search` had the same gap for `closureState` specifically, but through a second,
+independent bug on top of the first: `project_repo.go`'s `SearchProjects` query never selected
+`wso2_closure_state` at all (so `domain.Project` had nowhere to put it), **and**
+`project_service.go`'s `domain.Project` -> `domain.ProjectView` mapping didn't copy the field
+across even after it was added to the repo type -- the same shape of bug this file's own
+`StartDate` fix (see "SearchProjects crashed..." below) already hit once for a different field on
+this exact mapping. Both had to be fixed together: `domain.Project` gained a `ClosureState *string`
+field, the repo query now selects `p.wso2_closure_state::TEXT`, and the service layer's
+`ProjectView` construction now sets `ProjectClosureFields: domain.ProjectClosureFields{ClosureState: p.ClosureState}`.
+
+Two things intentionally left untouched by this same audit, not code bugs:
+- `GET /projects/{id}/features`' `acceptedSeverityValues`/`has*Access` flags being empty on some
+  environments is a **migration data-backfill gap, not a code bug** -- confirmed live: migration
+  000085's `ADD COLUMN`s exist, but its `UPDATE ... WHERE name = '<project type>'` backfill never
+  ran, because that environment's schema is owned by a separate sync tool (its own
+  `csm_migration_*` tracking tables, an entirely different numbering/naming scheme) that mirrors
+  column shape but has no way to replicate entity-service's own custom seed-data logic embedded in
+  a migration file. Redeploying entity-service will not fix this on its own; the backfill has to be
+  run directly against that environment.
+- `GET /projects/{id}/filters`' `severityBasedAllocationTime` has no real Postgres source and was
+  deliberately not derived from `sla_policy` (migration 0136 and its ServiceNow-synced rows) as a
+  substitute -- checked directly against real data, and none of that table's `RESPONSE`-target
+  durations match the actual per-severity minutes a real project's filters response returns, so
+  synthesizing a value from it would risk returning a plausible-looking but wrong number. This
+  stays an explicit TODO (see `project_metadata_service.go`'s own comment) rather than a fix.
+
 ## GetProjectByID 404'd on any project with no linked account
 
 Found in the same audit pass as the SearchProjects fix below, by explicitly
@@ -1144,7 +2611,7 @@ already tolerated a LEFT JOIN's NULLs without any change, since
 ## SearchProjects crashed on any page containing a NULL start_date/end_date/account_id
 
 Found while auditing whether `GetProjectByID`/`SearchProjects` still work
-correctly. `project.start_date`/`end_date`/`account_id` (migration 000009)
+correctly. `project.start_date`/`end_date`/`account_id` (migration 0014)
 are all nullable, but `domain.Project` (the internal repository<->service
 handoff type `SearchProjects` uses -- never serialized directly; `ProjectView`
 is what actually reaches a caller) had non-pointer `time.Time`/`string`
@@ -1206,7 +2673,7 @@ column by column (a local database built from every migration here vs staging,
 68 shared tables) when checked:
 
 - **Tables only in `migrations/`, absent from staging:** `alert_incident_mapping`
-  (000014), `case_attachments` (000043/000044), `announcement_requests` (000040),
+  (0103), `case_attachment` (0106/0107), `announcement_requests` (0120),
   `onboarding_step` (000075). Queries on them fail in staging with "relation does
   not exist"; none of it is a naming problem, the tables were simply never created.
 - **Columns renamed in staging** (the code used the old names and failed with
@@ -1217,14 +2684,48 @@ column by column (a local database built from every migration here vs staging,
   `payload_created_on/payload_updated_on`, `daily_usage_summary.deployment_ref` ->
   `deployment_number`. The `deployment_*` rename is a change of meaning, not just
   of spelling: the value is a deployment **number** (`DEP000002442`), never a UUID.
-- **Columns only in staging:** `sf_id` on `user`, `account_contact` and
-  `project_contact`; `case.github_issue_number`; `project.number`, `license_secrets`,
-  `primary_secret_key`, `secondary_secret_key`.
 - **Constraints:** the `work_item_wso2_id_required_by_type` CHECK exists in the
   migrations but not in staging.
 
 Check the live schema, not just the migrations, before assuming a table, column or
-constraint exists.
+constraint exists. `sf_id` on `user`/`account_contact`/`project_contact` and
+`project.number`/`license_secrets`/`primary_secret_key`/`secondary_secret_key`
+used to be on the "only in staging" list above; migrations 000075-000077 added
+them here too (schema only -- see the next section for why no Go code changed).
+
+## project.number, the three sf_id columns, and project's secret fields have no Go code yet, deliberately
+
+Migrations 000075-000077 add `project.primary_secret_key`/`secondary_secret_key`/
+`license_secrets`, `sf_id` on `account_contact`/`project_contact`/`"user"`, and
+`project.number` -- schema only, no repository/service/handler/route wiring, and
+that gap was checked deliberately rather than left as an oversight:
+
+- **`project.number` mirrors `account.number`'s own precedent, including the
+  "never read back" part.** `account.number` is written by `UpsertFromSalesforce`
+  (`account_repo.go`) but not selected by any query, not on `AccountRow`, and not
+  on `AccountView`/`AccountDetail` -- it exists purely so the Salesforce upsert has
+  somewhere to put the value. `project.number`'s own migration comment says it
+  follows that exact precedent, so it stays unexposed the same way until something
+  needs it.
+- **No code in this repo writes `project`, `account_contact`, `project_contact` or
+  `"user"` rows at all** (confirmed: no `INSERT`/`UPDATE` against any of the four
+  outside `UpsertFromSalesforce`, which only touches `account`). The real-time
+  Salesforce sync only handles `Customer`/`account` events
+  (`salesforce_event_service.go`, `internal/salesentity`) -- there is no
+  project/contact/user event handler to extend, so the three new `sf_id` columns
+  have no producer yet. The migration's own comment says as much for `"user"`: "has
+  no mapping populating it yet."
+- **`AccountContact`/`ProjectContact` expose no row-level identifier at all today**
+  (`ProjectContact.ID` is the linked *user's* id, not `project_contact.id`) --
+  contacts are always nested search results, never fetched by their own id, so
+  there is no existing shape to add `sfId` to without inventing one.
+- **The three secret columns hold credential material.** Nothing in this API
+  exposes a secret today, and adding one without being asked would be a real
+  security decision, not a schema follow-up -- left alone entirely.
+- **The `work_item_activity.updated_on`/`updated_by` columns these migrations also
+  drop are not selected anywhere** (`case_repo.go`/`incident_repo.go` only read
+  `id`/`created_on`/`user_email`/`field_name`/`old_value`/`new_value`), so removing
+  them needed no code change either.
 
 ## GetCaseByID's CloseNotes was silently swapped with ResolutionNotes
 
@@ -1288,7 +2789,7 @@ the tables to back them already existed and were queried elsewhere:
 own id.
 
 **`POST /groups/search`** is now Postgres-backed too (`group_repo.go`),
-against `team` (migration 000028) — "mirror[s] a hand-curated allow-list of
+against `team` (migration 0033) — "mirror[s] a hand-curated allow-list of
 ServiceNow's OOB sys_user_group / sys_user_grmember tables" per that
 migration's own comment, the same concept `GroupService` searches.
 `domain.Group.Active` has no backing column and is hardcoded `true`;
@@ -1301,8 +2802,10 @@ decision, not overlooked.
 
 ## IT services (CMDB services)
 
-`service` (migration 000048) is a standalone table — no FK to or from any
-other table in this schema. `ITServiceRepository.SearchITServices`
+`service` (migration 0044) is the CMDB service catalogue: `incident`,
+`incident_task`, `change_request`, `outage` and `cloud_monitor` reference it
+via `service_id`, `service_offering` via `parent_id`, and its five group
+columns (migration 0075) reference `"group"`. `ITServiceRepository.SearchITServices`
 (`it_service_repo.go`) wires `POST /services/search` up to it on Postgres;
 previously this route only existed on the ServiceNow data source.
 `domain.ITService.Class` is mapped from `service.category` (a free-text
@@ -1314,6 +2817,16 @@ literally named "class". `BusinessCriticality` maps 1:1 (case-folded) via
 ServiceNow data source) has no corresponding column on `service` at all —
 `category`/`subcategory` are free text, not drawn from that three-value set
 — so it is always left `nil` on Postgres rather than guessed at.
+
+**`SupportGroup` comes from `service.support_group_id`** (LEFT JOIN `"group"`).
+It was never selected before, so the CSM portal's Create Incident page — which
+defaults the incident's assignment group to the service's support group —
+always showed it blank. Use `support_group_id`, not `service.assignment_group_id`:
+support group is the ServiceNow/CSDM "team that handles this service's
+incidents" field (in synced data, 98% of incidents with both a service and an
+assignment group carry that service's support group), while a CI's own
+`assignment_group` is a different, generic field that no synced service sets.
+The incident's own group belongs on `work_item.assignment_group_id`.
 
 ## time_card.state/issue_complexity became real enums; case_id now targets work_item
 
@@ -1379,7 +2892,7 @@ whichever `EscalationService` it's given -- no changes needed there at all.
 **Not yet verifiable against real data**: `case_escalation`/
 `case_escalation_notification_list`'s migration hasn't actually been
 applied to the staging database this was checked against (same gap as
-`case_attachments`/`alert_incident_mapping`/`work_item_tag` -- see the
+`case_attachment`/`alert_incident_mapping`/`work_item_tag` -- see the
 "Fixing wso2_id" section's own note on checking directly against the
 database rather than trusting a migration file's presence in this repo).
 The code matches the migration's schema definition exactly; it just
@@ -1390,7 +2903,7 @@ couldn't be exercised against live rows yet.
 Found via a direct query against `work_item` grouped by `type`: `wso2_id`
 (`InternalID`) is `NULL` for a handful of real `CASE`/`ENGAGEMENT`/
 `SERVICE_REQUEST` rows, even though the `work_item_wso2_id_required_by_type`
-`CHECK` constraint (migration 000016) requires it `NOT NULL` for those
+`CHECK` constraint (migration 0021) requires it `NOT NULL` for those
 types -- **the constraint is evidently not actually enforced against this
 data** (added after these rows already existed, and never backfilled/
 revalidated). Don't trust a `CHECK` constraint's claim over what a direct
@@ -1528,13 +3041,13 @@ name for what this schema calls `service`, the same identification
 Problem/Incident IS applied too, mapped to `work_item.assigned_to_id`, a
 real, direct column. `madeSla`/`slaViolated` on Incident map to
 `incident.is_sla_met` and an `EXISTS`/`NOT EXISTS` check against `sla.has_breached`
-(migration 000052) respectively.
+(migration 0048) respectively.
 
 **`SearchIncidentActivities` reuses `scanCaseActivity`'s exact query shape**
 (`case_repo.go`) -- an activity feed entry (comment or field change) is not
 inherently case-specific, and `comment`/`work_item_activity` are both keyed
 by the generic `work_item_id`. Unlike `SearchCaseActivities`, there is no
-`case_attachments`-equivalent table for incidents, so this feed can never
+`case_attachment`-equivalent table for incidents, so this feed can never
 have an `"attachment"` kind entry.
 
 **`UpdateConversation` is implemented** (a plain `conversation.state` enum
@@ -1573,7 +3086,7 @@ change, not because either is infeasible.
 actually an incident/case-like work item before reading its activity
 feed** (`EXISTS (SELECT 1 FROM incident WHERE id = $1)` and the
 `caseLikeWorkItemTypes`-filtered equivalent respectively) -- found as a
-real IDOR during review: `comment`/`case_attachments`/`work_item_activity`
+real IDOR during review: `comment`/`case_attachment`/`work_item_activity`
 are all keyed by the generic `work_item_id` with no type filter of their
 own, so without this check a caller could pass any other work item's UUID
 (a change request, a different case, ...) through either endpoint and read
@@ -1583,7 +3096,7 @@ from the original comment/attachment UNION ALL implementation) and was
 fixed alongside the new incident one rather than left for later, since it's
 the identical bug.
 
-## change_request.change_model and work_item_activity (migrations 000055/000056)
+## change_request.change_model and work_item_activity (migrations 0056/0055)
 
 Two small, unrelated migrations, both unverified against real data (neither
 table/column exists on the staging database this was developed against
@@ -1626,13 +3139,16 @@ space-separated-title-case convention `taskSlaStageDisplay` already uses
 for a raw enum label) -- there's no field-name-to-display-label mapping
 anywhere else in this schema to defer to instead.
 
-## Instances and usage tracking (deployment_node, usage_count, daily_usage_summary, deployment_information)
+## Instances and usage tracking (deployment_node, hourly_usage_summary, daily_usage_summary, deployment_information)
 
-Migration 000054 added a 7-table cluster mirroring ServiceNow's product usage
-tracking (`deployment_node`, `deployment_information`, `usage_count`,
-`daily_usage_summary`, `monthly_usage_count`, `project_daily_summary`,
+Migration 000054 added a 6-table cluster mirroring ServiceNow's product usage
+tracking (`deployment_node`, `deployment_information`, `hourly_usage_summary`,
+`daily_usage_summary`, `monthly_usage_summary`,
 `product_usage_map`) -- see that migration's own doc comment for the full
-shape. This finally gives the previously ServiceNow-only "instance" concept
+shape. `project_daily_summary` was dropped from this cluster (it never had a
+consuming endpoint -- see the "not wired up" note below) to match the
+identically-named table's removal from `operations/csm-sync-service`'s own
+copy of this schema. This finally gives the previously ServiceNow-only "instance" concept
 (`InstanceService`, `POST /instances/*`) and the two
 `/deployed-products/{id}/metrics*` endpoints something to read on Postgres.
 `instance_repo.go`/`instance_service.go` are new; `deployed_product_repo.go`/
@@ -1647,15 +3163,20 @@ a real integer column (an earlier revision parsed a free-text `number_of_cores`)
 (`deployed_product.update_level_info` is a different, per-deployed-product
 concept, not per-node) and is always `nil`.
 
-**Column names follow staging, not `migrations/`.** Staging's schema is built by
-the sync service, and it renamed columns this code was written against:
+**Column names follow staging, not what an older revision of this file's own
+migration used to create.** Staging's schema is built by the sync service,
+which renamed columns this code was written against:
 `deployment_node.subscription_key` -> `project_key`, `deployment_node.deployment_ref`
 -> `deployment_number`, `deployment_information.number_of_cores` -> `core_count`
 and `reported_created_on/reported_updated_on` -> `payload_created_on/
 payload_updated_on`, `daily_usage_summary.deployment_ref` -> `deployment_number`.
-Migration 000054 still uses the old names. With the old names `SearchInstances`,
-`SearchInstanceMetrics` and `SearchInstanceUsage` failed on staging with "column
-does not exist". Check the live schema before trusting the migrations.
+Migration `0054_usage_tracking_tables.sql` used the old names until this was
+caught (checked directly against `operations/csm-sync-service`'s own copy of
+the same migration and this repo's own `instance_repo.go`, which already
+queried the *new* names) and fixed to match both — with the old names,
+`SearchInstances`, `SearchInstanceMetrics` and `SearchInstanceUsage` failed on
+staging with "column does not exist". Still worth checking the live schema
+before trusting any migration file, here or elsewhere.
 
 **Project/Deployment/DeployedProduct references, verified against staging.**
 `deployment_node.product_version_id` is a real foreign key, so `Product` is
@@ -1691,12 +3212,12 @@ because only one of them carries what each endpoint needs:**
   `DeploymentMetadata`) reads `deployment_information` -- the only table
   with JDK version or the raw deployment-info JSON at all.
 - `SearchInstanceUsage`/`InstanceSummary` (an open `map[string]int` of count
-  types per day) reads `usage_count` -- per-node, per-day, per-count-type
+  types per day) reads `hourly_usage_summary` -- per-node, per-day, per-count-type
   facts (`count_type` in practice holds `CORES`/`TPS`/`MTX`/`MAU`, but
   nothing enforces that set; it stays a free string, same reasoning as the
   migration's own comment on that column).
 - `SearchInstanceUsageStats` reads `daily_usage_summary` instead of
-  `usage_count`, specifically because `daily_usage_summary` is the only one
+  `hourly_usage_summary`, specifically because `daily_usage_summary` is the only one
   of the two with a `data_source` column (`usage_data_source_enum`:
   `API_CALL`/`FILE_UPLOAD`) -- `InstanceStatsFilters.DataSource` (an int, 1
   or 2) only has something to filter against there.
@@ -1723,22 +3244,21 @@ possible upstream), `SearchInstances`' metadata lookup could attach the same
 latest snapshot to both. Not fixable within this schema: `deployment_information`
 has no other way to identify which specific node row it belongs to.
 
-**`monthly_usage_count` and `project_daily_summary` are not wired up.** No
-existing endpoint's response shape has a monthly-granularity or
-project-level rollup concept to serve from them; `product_usage_map` (a
-product-code -> display-unit lookup) has no consuming field either. Left
-unused rather than exposed speculatively, same as other tables with no
-current caller elsewhere in this file.
+**`monthly_usage_summary` is not wired up.** No existing endpoint's response
+shape has a monthly-granularity rollup concept to serve from it;
+`product_usage_map` (a product-code -> display-unit lookup) has no consuming
+field either. Left unused rather than exposed speculatively, same as other
+tables with no current caller elsewhere in this file.
 
 ## Service offerings and task SLAs
 
-`service_offering` (migration 000049) is now Postgres-backed
+`service_offering` (migration 0045) is now Postgres-backed
 (`service_offering_repo.go`): `POST /service-offerings/search`, previously
-ServiceNow-only. `parent_id` (FK into `service`, migration 000048) maps to
+ServiceNow-only. `parent_id` (FK into `service`, migration 0044) maps to
 `ServiceOffering.Service`; `SearchServiceOfferingsFilters.ServiceIDs` filters
 on it.
 
-`sla`/`sla_policy` (migrations 000051/000052) back `TaskSlaService`
+`sla`/`sla_policy` (migrations 0047/0048) back `TaskSlaService`
 (`task_sla_repo.go`) -- previously ServiceNow-only `POST /task-slas/search`/
 `GET /task-slas/{id}`. Both tables are real and populated in the staging
 database (66 `sla_policy` rows, 128k+ `sla` rows at the time this was
@@ -1816,7 +3336,7 @@ this same split-interface-and-handler pattern rather than stubbing the rest.
 **`ReferenceDataRepository`** (`internal/repository/reference_data_repo.go`)
 backs both endpoints:
 - `ListProjectTypes`/`GetProjectByID` read the `project_type` table
-  (migration 000026) and `project.project_type_id` (migration 000027) --
+  (migration 0031) and `project.project_type_id` (migration 0032) --
   confirmed live: 1952 of 1956 `project` rows have a `project_type_id` set.
 - `EnumLabels` queries `pg_catalog.pg_enum`/`pg_type` directly (`WHERE
   t.typname = ANY($1::text[])`) rather than hardcoding each enum's label
@@ -1842,7 +3362,7 @@ ServiceNow-side config, not project/case data); `SeverityBasedAllocationTime`
 category field (no per-project feature-entitlement or severity-restriction
 columns exist anywhere in the Postgres schema -- checked directly against
 the `project` table's full column list, not just assumed). (`CallRequestStates`
-used to be on this list; `customer_call` -- migration 000072 -- has since
+used to be on this list; `customer_call` -- migration 0073 -- has since
 landed, so it's now read live from `customer_call_state_enum` like every other
 choice list. See "Call requests and the service-request catalog" below.)
 
@@ -1866,20 +3386,34 @@ validator (`golang-jwt/jwt/v5` + `keyfunc/v3`, same versions), against
 **Asgardeo** (not Choreo). Two tokens can arrive on the same request:
 - `x-user-id-token`: the end user's ID token. Checked for signature, issuer,
   expiry, an `aud` among `AUTH_USER_TOKEN_AUDIENCES`, and an `email` claim.
-- `Authorization: Bearer`: the calling application's client-credentials access
-  token (every backend, including csm-integration-service, sends one -- it's
-  the only token a pure machine-to-machine caller ever sends). Checked for
-  signature/issuer/expiry; its `client_id` (else `azp`) claim is the client id.
-  No audience check -- the client id is what gets authorized.
+- `x-jwt-assertion`: the calling application's client-credentials assertion
+  (every backend, including csm-integration-service, sends one -- it's the
+  only token a pure machine-to-machine caller ever sends). **Decoded only,
+  never signature/issuer/expiry-verified** (`Validator.ExtractClientID`) --
+  its `client_id` (else `azp`) claim is trusted at face value as the client
+  id. This mirrors `apps/csm-portal/backend`'s own `x-jwt-assertion` handling,
+  which runs with signature verification off in every Choreo deployment, not
+  just locally: this token is minted by the gateway in front of the service
+  after it already authenticated the caller by its own means, over a path
+  this service already trusts. Re-verifying it against Asgardeo's JWKS was
+  tried first and caused a real outage -- a JWKS refresh rate-limit/lookup
+  failure rejected every internal caller -- and added no real security either,
+  since the client id is only ever checked against the deployment-controlled
+  `AUTH_INTERNAL_CLIENT_IDS` allow-list, never used as a capability grant
+  derived from an unproven claim. No audience check either way.
 
 **Always on -- there is no config flag to disable it.** `AUTH_ISSUER`/
 `AUTH_JWKS_URL`/`AUTH_USER_TOKEN_AUDIENCES` are required (`config.Validate`
-rejects startup without them). Only asymmetric algorithms are accepted (an
+rejects startup without them) and govern `x-user-id-token` validation; they
+play no part in reading `x-jwt-assertion`, which is never checked against
+them. Only asymmetric algorithms are accepted for `x-user-id-token` (an
 HS256 token "signed" with the public key is rejected -- there is a test). A
-token that is **present but invalid is always a 401 on every route**, never
-downgraded to "no token": that would turn a forged user token into an
-anonymous request. A request with no tokens at all passes through the
-middleware; whether that's acceptable is decided per endpoint (see below).
+`x-user-id-token` that is **present but invalid is always a 401 on every
+route**, never downgraded to "no token": that would turn a forged user token
+into an anonymous request. `x-jwt-assertion` is rejected only when it can't
+even be decoded, or carries neither a `client_id` nor an `azp` claim. A
+request with no tokens at all passes through the middleware; whether that's
+acceptable is decided per endpoint (see below).
 
 Two things learned the hard way, both mirrored from/corrected against the CSM
 backend: Asgardeo publishes JWKS `x5c` certs Go 1.23+ refuses to parse, so the
@@ -1896,7 +3430,7 @@ same way everywhere it's wired (see "Where this is actually enforced" below):
 | Request carries | Result |
 |---|---|
 | no verified identity (only possible if the auth middleware was left out of the chain -- a bug) | 503 -- never scope from an unverified token |
-| Bearer client id is in `AUTH_INTERNAL_CLIENT_IDS` | **everything, unconditionally** -- regardless of any `x-user-id-token` the same request also carries |
+| `x-jwt-assertion` client id is in `AUTH_INTERNAL_CLIENT_IDS` | **everything, unconditionally** -- regardless of any `x-user-id-token` the same request also carries |
 | not an internal client, user token, `user_type` INTERNAL (all active rows for the email) | everything |
 | not an internal client, user token, EXTERNAL (customer) | only projects where their email is a `REGISTERED` `project_contact`, and the cases in them; none registered = an empty result, never "no filter" |
 | not an internal client, user token, inactive / SYSTEM / NOT_AVAILABLE / unknown email | 403 |
@@ -1926,7 +3460,7 @@ customer results are limited by how much has been synced; flip the state in
 `access_repo.go` if INVITED contacts should count.
 
 **A related, separate gap surfaced while building this, not yet fixed**:
-`recompute_user_type()`'s trigger (migration 000007) classifies only the
+`recompute_user_type()`'s trigger (migration 0011) classifies only the
 `admin` and `internal` Asgardeo/SN roles as `user_type = INTERNAL` -- a person
 whose only role is `agent` ends up `NOT_AVAILABLE` and is denied here even
 though they *do* have a `user` row. Whether `agent` should count as internal
@@ -1990,12 +3524,35 @@ ones that should have unconditional access. A caller that reaches entity-service
 *through* another service is identified by that other service's client id, not
 its own.
 
+The three product-consumption routes (`GET`/`PATCH
+/projects/{id}/consumption`, `POST
+/projects/{id}/deployments/{deploymentId}/license`) are scoped too, but check
+membership in `service.authorizeProject` rather than pushing the scope into a
+query. Two of the three have no query to push it into: a write and an upstream
+call that leaves the service entirely. Refused as a 404 for the same reason as
+the by-id reads. **These are scoped on both data sources**, unlike the five
+operations above -- they are registered in ServiceNow mode deliberately (see
+"Product-consumption provisioning state" in `README.md`), so ServiceNow is not
+there to scope them.
+
 **Not yet wired**: every other project/case-adjacent read (comments,
-escalations, time cards, attachments, conversations, change requests,
+time cards, attachments, conversations, change requests,
 call requests, catalogs, instances, etc.) still does no per-caller scoping --
-the auth middleware validates tokens on every route, but only the five
-operations above actually call `AccessService`. Extending it further is
-follow-up work, not done in this pass.
+the auth middleware validates tokens on every route, but only the operations
+above actually call `AccessService`. Extending it further is follow-up work,
+not done in this pass.
+
+**Exception, added later**: `POST /escalations` / `POST /cases/{id}/escalations`
+(`EscalationService.CreateEscalation`, Postgres data source) DOES call
+`AccessService.ResolveScope` and authorizes `caseId` through
+`CaseRepository.GetCaseByID` before mutating anything -- an out-of-scope
+case is a `NotFoundError`, same convention as the by-id reads above. This was
+wired in specifically because CreateEscalation MUTATES a case (escalate/
+de-escalate) and returns its details, unlike the read endpoints still listed
+above as not-yet-wired. Every OTHER case mutation (`UpdateCase`, `AddCaseTag`,
+`AcknowledgeCase`, `CreateCaseComment`, ...) remains unscoped -- this is a
+narrow, deliberately inconsistent fix for one endpoint under active review,
+not a decision that case mutations are scoped now.
 
 ## Call requests and the service-request catalog (migrations 000067-000072)
 
@@ -2108,13 +3665,42 @@ migration file). Timestamps are RFC3339 UTC like the rest of the Postgres code.
 
 `caseRepo.SearchCases` implements `tag`, `projectOnboardingStatus` (in/notIn),
 `taskSLABusinessElapsedPercent` (gte/lte), `escalationLevel`, `escalation`
-(isEmpty/isNotEmpty) and `anyOf`. The rest of the ServiceNow-shaped filters are
-still rejected with a 400 by `caseService.SearchCases` (`product`, `projectType`,
-`creTeam`/`sreTeam`, `slaBreached`, `accountEscalationActive`, ...) because
-dropping one would silently widen the result set. `creTeam`/`sreTeam` and
-call-request `assignmentTeamIds` are blocked on data, not schema: the group
-columns exist but staging's `group` table was empty (the sync has no job for the
-full group source) so every group FK is NULL.
+(isEmpty/isNotEmpty), `parentId` (eq), `product`, `creTeam`/`sreTeam` (in), and
+`anyOf`. The rest of the ServiceNow-shaped filters are still rejected with a 400
+by `caseService.SearchCases` (`projectType`, `slaBreached`,
+`accountEscalationActive`, ...) because dropping one would silently widen the
+result set.
+
+- **`product` (in)** was rejected outright even though `SearchCases`'s own
+  joins already carry `prod` (the deployed product's catalog row, used for
+  every result's `ProductName`) -- found alongside `creTeam`/`sreTeam` below
+  by proactively auditing `caseService.SearchCases`'s remaining rejections
+  for real backing columns rather than waiting for another live report.
+  Matches on `prod.name = ANY(...)`, an exact match against the same value
+  already selected into each row.
+- **`creTeam`/`sreTeam` (in)** were rejected the same way, but `SearchCases`
+  had no `account`/`"group"` join to filter on at all -- only `GetCaseByID`
+  had it (`account a` -> `"group" cre`/`"group" sre` via
+  `a.cre_team_id`/`a.sre_team_id`). Added the identical joins to
+  `SearchCases` and matched on `cre.id`/`sre.id = ANY(...)`. **Still blocked
+  on data, not schema, the same caveat as before this fix**: staging's
+  `group` table was empty as of the investigation that first found this (the
+  sync has no job for the full group source), so every group FK is NULL --
+  confirm `group` is actually populated in the target environment before
+  expecting this filter to return anything.
+
+- **`parentId eq`** was accepted by `ParseCaseFieldFilters` (the customer/CSM
+  portals' "Linked Items" tab sends it to find a case's child cases) but
+  unconditionally rejected by `caseService.SearchCases` with "not supported
+  by this data source", even though nothing about it is actually
+  ServiceNow-specific: `work_item.parent_id` (migration 0039) is the exact
+  same generic self-reference `GetCaseByID`'s own `ParentCase` already reads
+  in the other direction. Fixed with a plain `wi.parent_id = $N::uuid`
+  predicate in `SearchCases`'s `WHERE` clause — not routed through the
+  shared `caseFieldPredicates` (top-level + `anyOf` branches), since
+  `rejectUnsupportedOrGroupFields` already refuses `parentId` inside an
+  `anyOf` branch unconditionally (a pre-existing, unrelated rule, left as
+  is), so it only ever needs to apply at the top level.
 
 - **One builder for top-level fields and `anyOf` branches.** `caseFieldPredicates`
   (`case_field_predicates.go`) turns a `caseFieldSet` into SQL for type, project,
@@ -2166,11 +3752,11 @@ full group source) so every group FK is NULL.
 
 ## Announcement requests
 
-`announcement_requests` (migration `000040`, `internal/domain/entity.go`'s
+`announcement_requests` (migration `0042`, `internal/domain/entity.go`'s
 `AnnouncementRequest`, `internal/repository/announcement_request_repo.go`,
 `internal/service/announcement_request_service.go`) is durable state for an
 announcement that hasn't been published yet — `draft -> pending_approval ->
-approved -> published`. Like `sla_clocks`/`scheduled_task_run`, it has no
+approved -> published`. Like `event_publish_failures`/`scheduled_task_run`, it has no
 ServiceNow equivalent and is always backed by Postgres regardless of
 `DATA_SOURCE`. It exists purely to let the CSM portal remember an
 announcement is mid-flight while the real approval decision happens over
@@ -2249,6 +3835,57 @@ orders on `LOWER(COALESCE(NULLIF(name,''), first + last, user_name))` because
 `"user".name` is empty for a few synced rows (5 of 2,937 in staging); `u.id` is
 always the last tie-break so pages are stable. No `sortBy` keeps newest-first.
 
+## POST /users/search active filter on the Postgres data source
+
+`userService.SearchUsers` used to reject any `active` filter on Postgres
+("only supported for the ServiceNow data source") even though `"user".
+is_active` is a real, already-read column — found live via the case
+detail page's Time Tracking tab, whose approver search sends
+`{roleIds: ["timecard_approver"], active: true}` to only offer active
+approvers, and 400'd outright. `userRepo.SearchUsers` now filters on it:
+`active: true` matches `is_active IS NULL OR is_active = TRUE` (a NULL row
+counts as active, the same convention `AccessService.ResolveScope` already
+uses for this exact column), `active: false` matches `is_active = FALSE`
+strictly — a row with no `is_active` recorded at all is not known to be
+inactive, so it must not satisfy that filter.
+
+## POST /users/search userIds/groupIds/groupNames filters on the Postgres data source
+
+Same shape of gap as the `active` filter above, found by proactively auditing
+`SearchUsersFilters` for other fields still rejected outright on Postgres
+rather than waiting for another endpoint to hit one: `userIds`, `groupIds`
+and `groupNames` were all bundled into one blanket rejection, even though
+each has a real backing column/table already read elsewhere. `userRepo.
+SearchUsers` now filters on them:
+- `userIds` — `u.id = ANY($n::uuid[])`.
+- `groupIds` — `EXISTS (SELECT 1 FROM team_member tm WHERE tm.user_id = u.id
+  AND tm.team_id = ANY($n::uuid[]))` (migration 0033, the same table
+  `GetUserGroups` reads).
+- `groupNames` — the same `EXISTS` joined to `team` on `t.id = tm.team_id`,
+  matching `t.name = ANY($n::text[])` instead of the id; kept alongside
+  `groupIds` because callers' team registries are keyed by name (ids differ
+  per environment and not every configured team has one).
+
+`userService.SearchUsers` still validates `userIds`/`groupIds` as UUIDs
+(`validateUUIDs`) before they reach the repository — only the "unsupported on
+Postgres" rejection was removed, not the format check.
+
+## POST /users/search roleIds silently matched nothing for a namespaced role name
+
+Reported live: the Time Tracking tab's approver search
+(`{roleIds: ["timecard_approver"], active: true}`) came back empty (not a 400
+— the `active` fix above was already live) once the caller's list was scoped
+to that one role. `userRepo.SearchUsers`'s `roleIds` predicate did an exact
+`r.name = ANY(...)` match, but the synced `role.name` value carries a
+namespace prefix for at least some roles (`sn_customerservice.
+timecard_approver`, not the bare `timecard_approver` a caller sends — see the
+CSM webapp's own `ResponsiveRoleChips.tsx`'s `ROLE_CATALOGUE_ALIASES`, which
+exists purely to strip this same prefix back off for *display*; there was no
+equivalent normalization for *searching*). Fixed by also matching on the
+suffix after the last `.` (`regexp_replace(r.name, '^.*\.', '')`), so a filter
+value matches whether the stored name is bare or namespaced — purely
+additive: it can never match less than a plain `r.name = ANY(...)` did before.
+
 ## POST /users/search returns each user's roles (Postgres data source)
 
 The Postgres `User` had no roles, so the CSM users page showed none even though
@@ -2316,6 +3953,106 @@ ServiceNow flow it ports and why; read it before changing any predicate.
 
 `cycleStartDate` is a bare date, not a timestamp — the underlying columns are `DATE`, and
 accepting an instant would let a timezone creep into a boundary that has none.
+
+## POST /users creates a new "user" row (Postgres-only)
+
+Before this, no code anywhere in this service wrote a `"user"` row at all — `UpsertFromSalesforce`
+(`account_repo.go`) only ever touches `account`, and `project_membership_repo.go`'s own user upsert
+only fires as a side effect of ingesting a Salesforce membership. `UserRepository.CreateUser`
+(`user_repo.go`) is the first direct write path: `user_name` is always `lower(email)` (matching the
+membership ingest's own convention), `is_active` is always `TRUE`, and `id`/`created_on`/
+`updated_on` are supplied inline (`gen_random_uuid(), NOW(), NOW()`) since the column has no DB-side
+default. `user_type` is never set directly — it's derived by a trigger (migration 0011) from
+`is_system_user` (left unset here, so NULL/false) and role membership, the same as every other write
+path in this codebase that touches `"user"`.
+
+`roles` is optional; when supplied, `grantRoles` resolves every name against `role` (migration
+000004) **before** inserting any `user_role` row — a partially-granted set on one unseeded name would
+be a confusing half-success — and fails the whole request with a `ServiceUnavailableError` naming
+the first bad one, the same posture `syncGlobalRoles` uses for the Salesforce membership ingest
+(a role name is deployment config, not something this service validates against a fixed enum — see
+`domain.UserRole`'s own doc comment). Everything happens in one transaction: a duplicate email (the
+`user_name` `UNIQUE` constraint) or a missing role rolls back the insert too, never leaving an
+orphaned `"user"` row with no roles.
+
+The acting caller is resolved from `x-user-id-token` (`emailFromJWT`, the same helper `GetMe` uses)
+and stamped as `created_by`/`updated_by` — this service still has no notion of "admin" itself;
+restricting who may call this is `apps/csm-portal/backend`'s job (see that repo's own `CLAUDE.md`).
+
+## SearchDeployments crashed on any page containing a NULL deployment.type
+
+Reported live: `POST /deployments/search` failing with `cannot scan NULL into
+*string`. `deployment.type` (migration 0018) has no `NOT NULL` constraint —
+38 of 2859 rows are NULL on staging, checked live — but `DeploymentView.Type`
+is a required (non-pointer) `DeploymentType` field on the wire, and
+`deployment_repo.go`'s `SearchDeployments` scanned the column straight into
+it. Fixed the same way as `CaseView.InternalID` (see that section above):
+the wire contract stays a required string (every consumer already expects
+that), only the scan side changes — `d.type::TEXT` now scans into a `*string`
+local, and `stringOrEmpty(...)` (already used elsewhere in this file for the
+identical class of fix) converts a NULL to `""` instead of crashing the whole
+page. Verified directly against a real project with a NULL-type deployment on
+staging: the search now returns all of that project's deployments, the
+NULL-type ones as `"type": ""`.
+
+**`/cases/{id}/tasks/search` (and every other `TaskService` method) is not a
+bug — it's `unavailableTaskService`'s documented, deliberate 503** ("tasks
+are only supported for the ServiceNow data source"). Checked directly
+against staging: **no table matching `%task%` exists anywhere in the public
+schema** — there is no Postgres-backed task storage at all to have a data bug
+in. Implementing this would be a genuinely new feature (a migration + a real
+`task_repo.go`), not a fix to something already wired up incorrectly — same
+class of gap as `GlobalService.GlobalSearch`'s own "no Postgres
+implementation" note elsewhere in this file.
+
+## SearchProjects crashed on any page containing a NULL project.sf_id
+
+Reported live: `POST /projects/search` failing with `cannot scan NULL into
+*string`. `project.sf_id` is declared `NOT NULL` (migration 0014), but that
+constraint turned out not to be actually enforced against real data — the
+same class of gap `CaseView.InternalID`'s own doc comment describes for
+`wso2_id`, and `SearchDeployments`'s for `deployment.type` (see that section
+above) — and `project_repo.go`'s `SearchProjects` scanned the column straight
+into `domain.Project.SfID` (a required, non-pointer field). Fixed the same
+way as those: the wire contract stays a required string, only the scan side
+changes — `p.sf_id` now scans into a `*string` local, defaulted to `""` when
+NULL, rather than widening `Project.SfID` to `*string` and touching every
+other reader of it. `GetProjectDetails`'s own `sf_id` scan (a separate query,
+a separate endpoint) was not touched -- not reported broken, so left alone
+rather than fixed speculatively.
+
+## Case feedback silently 404'd on the Postgres data source instead of a documented 503
+
+Reported live: a case's Activity timeline always showed "Could not load Case
+Feedback" — on every case, every time. Unlike tasks (previous section) and
+every other ServiceNow-only entity in this codebase, `routes.go` only
+constructed `feedbackHandler` when `cfg.DataSource ==
+config.DataSourceServiceNow`, leaving it `nil` (and, with the surrounding
+`if feedbackHandler != nil` guard, both `POST /cases/feedback/search` and
+`/aggregate` entirely **unregistered**) on Postgres — a silent 404, even
+though `openapi.yaml` already documents a `503` `ErrorResponse` for both
+paths. No feedback table exists anywhere in `migrations/` either, so this is
+genuinely ServiceNow-only, same as tasks — the bug was purely in *how* that
+was expressed. Fixed by adding `unavailableFeedbackService`
+(`feedback_service.go`), an exact mirror of `unavailableTaskService`: every
+method returns the documented `*apierror.ServiceUnavailableError`. `routes.go`
+now always constructs `feedbackHandler` (Postgres gets the unavailable
+stand-in, same `if cfg.DataSource == ... else ...` shape as `activeTaskSvc`
+above) and always registers both routes unconditionally — a real, documented
+503 instead of an undocumented 404 callers can't distinguish from a
+genuinely missing resource.
+
+**Update:** the "no feedback table" premise above is stale. Migration `0102`
+added `work_item_feedback`, and `pgFeedbackService`
+(`pg_feedback_service.go`, over `feedback_repo.go`) now serves `POST
+/cases/feedback/search` and `/aggregate` for both the `postgres` and
+`postgres-servicenow-dual-write` data sources (dual write reads Postgres, never
+the backing system). `unavailableFeedbackService` is now only the fallback for
+a data source with no feedback store. Known gaps: the table stores no
+per-rating reason chips, so every `reasons_*` bucket returns an empty result;
+`GET`/`POST /cases/{id}/feedback` (the emoji submission contract) is still a
+503 on Postgres because `work_item_feedback` has no emoji id, chip ids or
+assessment id to serve it from.
 
 ## Adding a new entity
 
@@ -2405,13 +4142,24 @@ All shared types live in `internal/domain/entity.go`. Conventions:
 
 ## Database migrations
 
-Migrations live in `migrations/` as plain SQL files, numbered `000NNN_<description>.up.sql` / `.down.sql`. Each migration creates its PostgreSQL enums, sequences, and tables in a single transaction. Apply them in ascending order before starting the service.
+Migrations live in `migrations/` as plain SQL files, numbered `NNNN_<description>.sql` (4-digit, single file, no separate `.up`/`.down`) — matching `operations/csm-sync-service`'s own convention exactly, since that service and this one migrate against the same shared Postgres database. This replaces the older `000NNN_<description>.up.sql`/`.down.sql` convention (6-digit, up/down pairs) this file used to document; every migration under the old convention was renumbered/consolidated into the new one, not left running side by side with it.
+
+- **Each file is a complete, forward-only migration** — there is no scripted rollback. A change that needs undoing is a new forward migration, not a `.down.sql`. `IF NOT EXISTS`/`IF EXISTS` guards (already this repo's convention) make every file safe to re-run.
+- **A migration file itself carries no tracking statement.** `make migrate` (Makefile) creates `csm_migration_applied_migration` (`filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now()`) if absent, then for each `migrations/*.sql` file, in ascending order: skips it if its name is already in that table, otherwise applies it (`psql -f`) and only then records it with a separate `INSERT INTO csm_migration_applied_migration (filename) VALUES (...)` — this exactly mirrors `operations/csm-sync-service`'s own `make migrate` loop, since both services must track migrations against the same shared database the same way. `scripts/generate_schema_bootstrap.sh` (a combined-file generator for a from-scratch DB, also ported from that service, supporting `--since`/`--from`/`--to` for a delta) is the one thing that *does* append the tracking insert per migration — necessary there because a single concatenated file has no per-statement loop to do it externally.
+- **Numbers `0001`–`0102` are a byte-for-byte, contiguous mirror of `operations/csm-sync-service`'s own `migrations/0001`–`0102`**, including its control-plane tables (`migration_job`/`migration_run`/`sync_checkpoint`/`schema_version`, renamed to the `csm_migration_` prefix at `0091`) — entity-service's own Go code never queries those tables, but the file is kept here anyway so `make migrate` produces the *identical* resulting schema whichever repo it's run from, not just an overlapping subset. A handful of these (e.g. `0025`/`0033`/`0098`) are no-ops against this repo's own already-correct `CREATE TABLE` statements (guarded by `IF EXISTS`/`IF NOT EXISTS`/an already-true condition) — kept anyway, for the same reason. Beyond `0102`, this repo has its own entity-specific migrations that only exist on this side (`0103`+ covers GitHub integration, announcement requests, onboarding steps, the Team Schedule tables, and more — none of it sync-service's concern) — **but a shared-table migration from sync-service is still pulled in verbatim under its own real filename whenever one lands, even at a number this repo has already used for something else of its own.** `0090_outage_affected_ci_table.sql` and `0103`–`0108` (`product_name_unit_unique`, `project_add_onboarding_owner`, `product_version_deployment_profile_unique`, `incident_category_add_missing_values`, `incident_resolution_code_add_resolved_by_caller`, `case_cause_add_user_mistake`) are exactly this: sync-service migrations mirrored in unchanged, coexisting at the same leading number as this repo's own unrelated files there — normal per "Duplicate migration numbers are normal here" in the top-level `cs-tools/CLAUDE.md`, since the tracking key is the full basename. **Never rename a mirrored file to avoid the collision or to fit this repo's own sequence** — the filename is what `csm_migration_applied_migration` tracks it by, so a rename makes `make migrate` treat an already-applied sync-service migration as brand new and re-run it from scratch against a database where the real, differently-named version already ran.
+- **Whenever a new migration touches a shared table (not something entity-service-only), check `operations/csm-sync-service/migrations/` directly for the next real number before picking one here** — its migrations are the authoritative record of what actually runs against the shared database, and it has continued past whatever this file's own highest number was at any given time. Picking a number here that sync-service has already used for something else creates two same-numbered-but-different migrations across the two repos; `make migrate` from either repo would then apply both under different filenames with no conflict *detected*, silently leaving whichever repo didn't get involved missing the other's columns/tables. When sync-service adds a migration for a table entity-service also cares about (or its own control-plane numbering advances), mirror the file here at the same number, the same way `0101`/`0102` (`account_support_fields`/`work_item_feedback_table`) were pulled in.
+- **The identical collision can happen entirely within this repo, with no other service involved.** Two branches cut from the same base each see the same "current highest number," each add their own next-numbered file, and both PRs merge cleanly — git sees two different filenames, so there's no merge conflict to catch it. The result is the same silent, undetected collision as the cross-repo case above: two unrelated migrations sharing one number, `make migrate` applies both under their own filenames without complaint, and the numbering no longer identifies one unambiguous point in the sequence. Rebase onto the target branch's actual latest `migrations/` state before opening a migration PR, and check for a same-number collision as part of reviewing one — this repo has no CI check enforcing unique leading numbers today.
+- **`ALTER TYPE ... ADD VALUE` migrations stay the only statement in their file** — it cannot run in the same transaction as a later statement that uses the new value, and every file here is expected to be applied with plain autocommit (never wrapped in `BEGIN`/`COMMIT`, never run with `psql -1`/`--single-transaction`).
+
+Each migration creates its PostgreSQL enums, sequences, and tables in a single transaction (aside from the `ALTER TYPE ... ADD VALUE` exception above). Apply them in ascending order before starting the service — `make migrate` does this.
 
 Key conventions enforced at the DB level:
 - Primary keys are `UUID DEFAULT gen_random_uuid()`
 - Human-readable IDs (e.g. `CASE-001`, `WSO2-001`) are generated from dedicated sequences via column defaults
 - Enum types (e.g. `case_state_enum`, `case_priority_enum`) enforce valid values at the DB level; Go enum validation in the service layer is an additional guard
 - Triggers enforce relational constraints that foreign keys alone cannot express (e.g. deployment must belong to the same project as the case)
+- **Table names are always singular** (`case`, `user`, `comment`, `product_vulnerability`, `case_attachment`, ...), never plural (`cases`, `users`, `case_attachments`). A plural name (`case_attachments`) has been introduced by mistake before and had to be renamed later — check this before adding a new `CREATE TABLE`.
+- **Timestamp columns always use the `_on` suffix** (`created_on`, `updated_on`, `resolved_on`, `started_on`, `due_on`, ...), never `_at` (`created_at`, `updated_at`). This mirrors the JSON `On`-suffix convention under "Domain types" below — the DB column and the wire field should read the same way. Several migrations (`alert_incident_mapping`, `event_publish_failures`, the now-removed `sla_clocks`, `case_attachment`, `scheduled_task_run`, `sn_writeback_failures`, `announcement_requests`) used `_at` before being fixed — check this before adding a new `TIMESTAMPTZ` column.
 
 ## OpenAPI spec
 

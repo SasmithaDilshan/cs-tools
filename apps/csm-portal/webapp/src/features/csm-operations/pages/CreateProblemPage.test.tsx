@@ -22,7 +22,10 @@ const navigateMock = vi.fn();
 const postProblemMutateMock = vi.fn();
 const showErrorMock = vi.fn();
 const isPending = false;
-let locationState: { from?: string } | undefined;
+let locationState:
+  | { from?: string }
+  | { incidentId: string; incidentNumber?: string; incidentSubject?: string; from?: string }
+  | undefined;
 
 vi.mock("react-router", () => ({
   useNavigate: () => navigateMock,
@@ -71,6 +74,14 @@ vi.mock("@components/AsyncEntitySelect", () => ({
     <input aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} />
   ),
 }));
+// This form's Lexical-based editor renders real content in a browser but not
+// under jsdom in a way vitest can drive reliably — stub it to a plain
+// textarea, same technique as CreateChangeRequestPage.test.tsx.
+vi.mock("@components/rich-text-editor/Editor", () => ({
+  default: ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
+    <textarea aria-label="editor" value={value} onChange={(e) => onChange(e.target.value)} />
+  ),
+}));
 
 // Imported after the mocks above so the module picks them up.
 import CreateProblemPage from "@features/csm-operations/pages/CreateProblemPage";
@@ -83,18 +94,18 @@ describe("CreateProblemPage", () => {
     showErrorMock.mockReset();
   });
 
-  it("disables submit until Subject is filled in", () => {
+  it("disables submit until the problem statement is filled in", () => {
     render(<CreateProblemPage />);
     expect(screen.getByRole("button", { name: /create problem/i })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "Recurring gateway 502s" },
     });
     expect(screen.getByRole("button", { name: /create problem/i })).not.toBeDisabled();
   });
 
-  it("shows a required error once Subject is touched and left blank", () => {
+  it("shows a required error once the problem statement is touched and left blank", () => {
     render(<CreateProblemPage />);
-    fireEvent.blur(screen.getByLabelText(/subject/i));
+    fireEvent.blur(screen.getByLabelText(/problem statement/i));
     expect(screen.getByText("Required")).toBeInTheDocument();
   });
 
@@ -105,7 +116,7 @@ describe("CreateProblemPage", () => {
 
   it("submits only the fields the user filled in, with subject trimmed", () => {
     render(<CreateProblemPage />);
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "  Recurring gateway 502s  " },
     });
     // Category is a dependent Select — open it and pick an option rather
@@ -116,6 +127,36 @@ describe("CreateProblemPage", () => {
     expect(postProblemMutateMock).toHaveBeenCalledWith(
       { subject: "Recurring gateway 502s", category: "software" },
       expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+    );
+  });
+
+  it("is optional — submitting with no description omits the field", () => {
+    render(<CreateProblemPage />);
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
+      target: { value: "Recurring gateway 502s" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create problem/i }));
+    expect(postProblemMutateMock).toHaveBeenCalledWith(
+      { subject: "Recurring gateway 502s" },
+      expect.anything(),
+    );
+  });
+
+  it("includes the description when the user fills it in", () => {
+    render(<CreateProblemPage />);
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
+      target: { value: "Recurring gateway 502s" },
+    });
+    fireEvent.change(screen.getByLabelText("editor"), {
+      target: { value: "<p>Started after the 14:00 deploy.</p>" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create problem/i }));
+    expect(postProblemMutateMock).toHaveBeenCalledWith(
+      {
+        subject: "Recurring gateway 502s",
+        description: "<p>Started after the 14:00 deploy.</p>",
+      },
+      expect.anything(),
     );
   });
 
@@ -139,7 +180,7 @@ describe("CreateProblemPage", () => {
 
   it("includes the optional linking IDs when provided", () => {
     render(<CreateProblemPage />);
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "Recurring gateway 502s" },
     });
     fireEvent.change(screen.getByLabelText(/origin case/i), {
@@ -161,7 +202,7 @@ describe("CreateProblemPage", () => {
 
   it("navigates to the new problem's detail page on success", () => {
     render(<CreateProblemPage />);
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "Recurring gateway 502s" },
     });
     fireEvent.click(screen.getByRole("button", { name: /create problem/i }));
@@ -174,7 +215,7 @@ describe("CreateProblemPage", () => {
 
   it("surfaces a mutation error via the shared error banner", () => {
     render(<CreateProblemPage />);
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "Recurring gateway 502s" },
     });
     fireEvent.click(screen.getByRole("button", { name: /create problem/i }));
@@ -211,7 +252,7 @@ describe("CreateProblemPage — Back navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(navigateMock).toHaveBeenCalledWith("/customers/projects/proj-1?tab=workItems");
 
-    fireEvent.change(screen.getByLabelText(/subject/i), {
+    fireEvent.change(screen.getByLabelText(/problem statement/i), {
       target: { value: "Recurring gateway 502s" },
     });
     fireEvent.click(screen.getByRole("button", { name: /create problem/i }));
@@ -228,5 +269,37 @@ describe("CreateProblemPage — Back navigation", () => {
     render(<CreateProblemPage />);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(navigateMock).toHaveBeenCalledWith("/customers/projects/proj-1?tab=workItems");
+  });
+});
+
+// Regression test: a plain `{ from }` navigation (e.g. opened from the
+// Problems list) is still a truthy object, so an unchecked cast to the
+// incident nav-state shape read it as "opened from an incident" and rendered
+// the incident-origin notice/prefill even though no incident was involved.
+describe("CreateProblemPage — plain { from } navigation is not mistaken for an incident origin", () => {
+  beforeEach(() => {
+    locationState = undefined;
+    navigateMock.mockReset();
+    postProblemMutateMock.mockReset();
+    showErrorMock.mockReset();
+  });
+
+  it("does not show the incident-origin notice or prefill Primary incident when opened with only { from }", () => {
+    locationState = { from: "/operations?tab=problems" };
+    render(<CreateProblemPage />);
+    expect(screen.queryByText(/opened from/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/primary incident/i)).toHaveValue("");
+    expect(screen.getByLabelText(/problem statement/i)).toHaveValue("");
+  });
+
+  it("does show the incident-origin notice and prefill when opened from an incident", () => {
+    locationState = {
+      incidentId: "inc-456",
+      incidentNumber: "INC0012345",
+      incidentSubject: "Gateway 502s",
+    };
+    render(<CreateProblemPage />);
+    expect(screen.getByText(/opened from INC0012345/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/primary incident/i)).toHaveValue("inc-456");
   });
 });

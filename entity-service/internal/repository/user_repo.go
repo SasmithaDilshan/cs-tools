@@ -23,9 +23,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/domain"
@@ -33,7 +35,7 @@ import (
 )
 
 // UserRepository defines the persistence operations for the "user" table
-// (migration 000001).
+// (migration 0002).
 type UserRepository interface {
 	// SearchUsers returns a filtered, paginated slice of users together with
 	// the total count of rows that match the filter (before pagination).
@@ -45,7 +47,7 @@ type UserRepository interface {
 	// NotFoundError if no matching user exists.
 	GetUserByEmail(ctx context.Context, email string) (domain.User, error)
 	// GetUserRoles returns the role names assigned to userID via user_role
-	// (migration 000006), empty if none.
+	// (migration 0010), empty if none.
 	GetUserRoles(ctx context.Context, userID string) ([]string, error)
 	// GetUserDetail returns the user with the given id (name, active flag and
 	// type; no roles/groups/access), or a NotFoundError.
@@ -54,8 +56,16 @@ type UserRepository interface {
 	// with its project, linked contact record and project roles.
 	GetUserProjectAccess(ctx context.Context, email string) ([]domain.UserContactAccess, error)
 	// GetUserGroups returns every team userID belongs to via team_member
-	// (migration 000028), empty if none.
+	// (migration 0033), empty if none.
 	GetUserGroups(ctx context.Context, userID string) ([]domain.UserGroupRef, error)
+	// CreateUser inserts a new "user" row (user_name = lower(email), matching
+	// the Salesforce membership ingest's own convention) and, if req.Roles is
+	// non-empty, grants each role via user_role in the same transaction.
+	// actor is the acting caller's email, stamped as created_by/updated_by on
+	// every row this writes. Returns a ConflictError if email is already in
+	// use (user_name is UNIQUE), a ServiceUnavailableError naming any
+	// requested role not seeded in the role table.
+	CreateUser(ctx context.Context, req domain.CreateUserRequest, actor string) (domain.User, error)
 }
 
 type userRepo struct {
@@ -68,7 +78,7 @@ func NewUserRepository(db *pgxpool.Pool) UserRepository {
 }
 
 // userColumns is the column list shared by GetUserByEmail and SearchUsers.
-// The "user" table (migration 000001) has no phone/timezone column at all --
+// The "user" table (migration 0002) has no phone/timezone column at all --
 // unlike account.phone, there is nothing to select for domain.User's Phone/
 // Timezone fields, so both are simply left nil (Go's pointer zero value)
 // rather than queried. Postgres-backed PatchMe/TimeZone support does not
@@ -110,7 +120,7 @@ func userOrderBy(s domain.UserSortBy) string {
 const prefixUserColumns = `u.id, u.user_name, u.first_name, u.last_name, u.email, u.user_type::TEXT, u.created_on, u.updated_on`
 
 // userTypeFromEnum maps "user".user_type's real user_type_enum labels
-// (migration 000007) to domain.UserType. EXTERNAL becomes UserTypeCustomer,
+// (migration 0011) to domain.UserType. EXTERNAL becomes UserTypeCustomer,
 // not UserTypeExternal -- see UserTypeExternal's own doc comment: "the
 // postgres source emits customer, ServiceNow emits external" for the same
 // underlying concept. NOT_AVAILABLE (recompute_user_type's fallback when a
@@ -129,7 +139,7 @@ func scanUser(row interface{ Scan(...any) error }) (domain.User, error) {
 	if err != nil {
 		return domain.User{}, err
 	}
-	// first_name/last_name/email/user_type (migration 000001/000007) all
+	// first_name/last_name/email/user_type (migration 0002/0011) all
 	// have no NOT NULL constraint; the domain.User fields they fill are
 	// required (non-pointer), so a NULL column becomes "" rather than
 	// failing the scan.
@@ -146,7 +156,11 @@ func scanUser(row interface{ Scan(...any) error }) (domain.User, error) {
 func (r *userRepo) GetUserByEmail(ctx context.Context, email string) (domain.User, error) {
 	u, err := scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM "user" WHERE email = $1`, email))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.User{}, &apierror.NotFoundError{Msg: "no user found with email: " + email}
+		// Msg never carries the email — writeServiceError (internal/handler/
+		// decode.go) logs every NotFoundError's Msg verbatim, so this is the
+		// one place that decides whether it leaks into logs for every caller
+		// of this method, not just GetMe.
+		return domain.User{}, &apierror.NotFoundError{Msg: "no user found with that email"}
 	}
 	if err != nil {
 		return domain.User{}, fmt.Errorf("get user by email: %w", err)
@@ -186,21 +200,68 @@ func (r *userRepo) SearchUsers(ctx context.Context, req domain.SearchUsersReques
 	}
 
 	if len(req.Filters.RoleIDs) > 0 {
-		// RoleIDs holds role NAMEs (role.name, migration 000004), not UUIDs,
+		// RoleIDs holds role NAMEs (role.name, migration 0008), not UUIDs,
 		// despite the field's name -- see domain.UserRole's own doc comment
 		// ("deliberately an open string type"). Matches if the user holds
 		// ANY of the given roles (OR semantics), via user_role (migration
 		// 000006).
+		//
+		// The synced role.name value carries a namespace prefix for at
+		// least some roles (e.g. "sn_customerservice.timecard_approver" --
+		// see the webapp's own ROLE_CATALOGUE_ALIASES, which exists purely
+		// to strip this same prefix back off for display), while a caller
+		// filtering by roleIds sends the bare, unnamespaced name (matching
+		// CSM_USER_ROLES' own vocabulary). Matching on the suffix after the
+		// last "." as well as the exact value handles either shape without
+		// hardcoding a specific namespace string, and never matches less
+		// than a plain r.name = ANY(...) would have on its own.
 		roleNames := make([]string, len(req.Filters.RoleIDs))
 		for i, role := range req.Filters.RoleIDs {
 			roleNames[i] = string(role)
 		}
 		where += fmt.Sprintf(` AND EXISTS (
 			SELECT 1 FROM user_role ur JOIN role r ON r.id = ur.role_id
-			WHERE ur.user_id = u.id AND r.name = ANY($%d::text[])
-		)`, argIdx)
+			WHERE ur.user_id = u.id
+			  AND (r.name = ANY($%d::text[]) OR regexp_replace(r.name, '^.*\.', '') = ANY($%d::text[]))
+		)`, argIdx, argIdx)
 		filterArgs = append(filterArgs, roleNames)
 		argIdx++
+	}
+
+	if len(req.Filters.UserIDs) > 0 {
+		where += fmt.Sprintf(" AND u.id = ANY($%d::uuid[])", argIdx)
+		filterArgs = append(filterArgs, req.Filters.UserIDs)
+		argIdx++
+	}
+
+	if len(req.Filters.GroupIDs) > 0 {
+		where += fmt.Sprintf(` AND EXISTS (
+			SELECT 1 FROM team_member tm WHERE tm.user_id = u.id AND tm.team_id = ANY($%d::uuid[])
+		)`, argIdx)
+		filterArgs = append(filterArgs, req.Filters.GroupIDs)
+		argIdx++
+	}
+
+	if len(req.Filters.GroupNames) > 0 {
+		where += fmt.Sprintf(` AND EXISTS (
+			SELECT 1 FROM team_member tm JOIN team t ON t.id = tm.team_id
+			WHERE tm.user_id = u.id AND t.name = ANY($%d::text[])
+		)`, argIdx)
+		filterArgs = append(filterArgs, req.Filters.GroupNames)
+		argIdx++
+	}
+
+	if req.Filters.Active != nil {
+		// "user".is_active is nullable; a NULL row counts as active, the same
+		// convention AccessService.ResolveScope already uses for this exact
+		// column ("user.is_active NULL counts as active" -- access_repo.go).
+		// active=false is strict, though: a row with no is_active recorded at
+		// all is not known to be inactive, so it must not match that filter.
+		if *req.Filters.Active {
+			where += " AND (u.is_active IS NULL OR u.is_active = TRUE)"
+		} else {
+			where += " AND u.is_active = FALSE"
+		}
 	}
 
 	const fromClause = `FROM "user" u`
@@ -412,6 +473,122 @@ func (r *userRepo) GetUserProjectAccess(ctx context.Context, email string) ([]do
 		return nil, fmt.Errorf("iterate user project access: %w", err)
 	}
 	return access, nil
+}
+
+// CreateUser implements UserRepository.
+func (r *userRepo) CreateUser(ctx context.Context, req domain.CreateUserRequest, actor string) (domain.User, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("create user: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	var u domain.User
+	var firstName, lastName, userType *string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO "user" (id, created_on, updated_on, created_by, updated_by,
+			user_name, first_name, last_name, email, is_active)
+		VALUES (gen_random_uuid(), NOW(), NOW(), $1, $1, $2, $3, $4, $2, TRUE)
+		RETURNING id, user_name, first_name, last_name, email, user_type::TEXT, created_on, updated_on`,
+		actor, email, nullIfBlank(req.FirstName), nullIfBlank(req.LastName),
+	).Scan(&u.ID, &u.UserName, &firstName, &lastName, &u.Email, &userType, &u.CreatedOn, &u.UpdatedOn)
+	if err != nil {
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Msg never carries the email -- writeServiceError (internal/
+			// handler/decode.go) logs every ConflictError's Msg verbatim, and
+			// this endpoint lets any caller submit any req.Email, so echoing
+			// it back would both log and return a third party's address to
+			// whoever happened to guess/probe it.
+			return domain.User{}, &apierror.ConflictError{Msg: "a user with this email already exists"}
+		}
+		return domain.User{}, fmt.Errorf("create user: insert user: %w", err)
+	}
+	u.FirstName = stringOrEmpty(firstName)
+	u.LastName = stringOrEmpty(lastName)
+	if userType != nil {
+		u.UserType = userTypeFromEnum[*userType]
+	}
+
+	u.Roles, err = grantRoles(ctx, tx, u.ID, req.Roles, actor)
+	if err != nil {
+		return domain.User{}, err
+	}
+
+	// user_type is trigger-derived from role membership (migration 0011),
+	// so the value RETURNING read above -- before any role was granted -- can
+	// already be stale once grantRoles has run. Only worth a second read when
+	// a role was actually granted; with none, nothing could have changed it.
+	if len(u.Roles) > 0 {
+		userType = nil
+		if err := tx.QueryRow(ctx, `SELECT user_type::TEXT FROM "user" WHERE id = $1`, u.ID).Scan(&userType); err != nil {
+			return domain.User{}, fmt.Errorf("create user: reload user type: %w", err)
+		}
+		if userType != nil {
+			u.UserType = userTypeFromEnum[*userType]
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.User{}, fmt.Errorf("create user: commit: %w", err)
+	}
+	return u, nil
+}
+
+// grantRoles resolves each of names (role.name, migration 0008) to its id
+// and inserts a user_role row for it, all inside tx. Every name must exist in
+// role before anything is inserted -- a partially-granted set on an unseeded
+// role name would be a confusing half-success. Returns the granted names,
+// sorted, for the response (never nil, so it serializes as [] when names is
+// empty).
+func grantRoles(ctx context.Context, tx pgx.Tx, userID string, names []domain.UserRole, actor string) ([]string, error) {
+	if len(names) == 0 {
+		return []string{}, nil
+	}
+	wanted := make([]string, len(names))
+	for i, n := range names {
+		wanted[i] = string(n)
+	}
+
+	roleIDs := map[string]string{}
+	rows, err := tx.Query(ctx, `SELECT id, name FROM role WHERE name = ANY($1::text[])`, wanted)
+	if err != nil {
+		return nil, fmt.Errorf("create user: resolve roles: %w", err)
+	}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("create user: scan role: %w", err)
+		}
+		roleIDs[name] = id
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("create user: iterate roles: %w", err)
+	}
+	for _, name := range wanted {
+		if _, ok := roleIDs[name]; !ok {
+			return nil, &apierror.ServiceUnavailableError{Msg: fmt.Sprintf("role %q is not seeded in the role table", name)}
+		}
+	}
+
+	granted := make([]string, 0, len(wanted))
+	seen := map[string]bool{}
+	for _, name := range wanted {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO user_role (id, created_on, updated_on, created_by, updated_by, user_id, role_id)
+			VALUES (gen_random_uuid(), NOW(), NOW(), $1, $1, $2, $3)`, actor, userID, roleIDs[name]); err != nil {
+			return nil, fmt.Errorf("create user: grant role %s: %w", name, err)
+		}
+		granted = append(granted, name)
+	}
+	sort.Strings(granted)
+	return granted, nil
 }
 
 // GetUserGroups implements UserRepository.

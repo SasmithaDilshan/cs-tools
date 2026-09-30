@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,6 +44,11 @@ type entityUserClient interface {
 	PatchUserMe(ctx context.Context, body []byte) ([]byte, error)
 	SearchUsers(ctx context.Context, body []byte) ([]byte, error)
 	GetUser(ctx context.Context, id string) ([]byte, error)
+	CreateUser(ctx context.Context, body []byte) ([]byte, error)
+	ListSavedFilterViews(ctx context.Context, listKey string) ([]byte, error)
+	SaveSavedFilterView(ctx context.Context, body []byte) ([]byte, error)
+	DeleteSavedFilterView(ctx context.Context, listKey, name string) ([]byte, error)
+	ReorderSavedFilterView(ctx context.Context, body []byte) ([]byte, error)
 }
 
 // UsersHandler handles HTTP requests for user-related operations.
@@ -96,7 +102,7 @@ type userMeResponse struct {
 	FirstName *string `json:"firstName,omitempty"`
 	LastName  *string `json:"lastName,omitempty"`
 	TimeZone  *string `json:"timeZone,omitempty"`
-	// Roles is which portal roles (viewer, support_engineer, admin, ...) the
+	// Roles is which portal roles (viewer, cs_engineer, admin, ...) the
 	// caller's token roles grant: several are possible. It is not the entity
 	// service's role data, which this response no longer carries. Always
 	// present, [] when they hold none.
@@ -356,5 +362,154 @@ func (h *UsersHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	// enrichment above, so a failure in either never blocks the other.
 	enriched = h.withExternalAccountStatus(r.Context(), enriched, user.UserID)
 
+	// Independent of both enrichments above: replaces entity-service's own
+	// role vocabulary with the portal-role one, for an internal target only.
+	enriched = h.withPortalRoles(r.Context(), enriched, user.UserID)
+
 	writeJSON(w, http.StatusOK, enriched)
+}
+
+// createUserRequest is the POST /users request shape, parsed here only to
+// validate roles against the directory's assignable-role allow-list --
+// entity-service deliberately does not validate role names itself (see
+// domain.UserRole's own doc comment there), so this is the one place that
+// does. The body is otherwise forwarded to the entity service unchanged.
+type createUserRequest struct {
+	FirstName string   `json:"firstName"`
+	LastName  string   `json:"lastName"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+}
+
+// CreateUser handles POST /users. Restricted to admin via the route's
+// PermAdmin permission (cmd/server/main.go) — this handler itself only
+// validates the request shape, it does not re-check the caller's role.
+func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserInfoFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, ErrMsgUnauthorized)
+		return
+	}
+
+	body, ok := readJSONBody(w, r)
+	if !ok {
+		return
+	}
+
+	var req createUserRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, ErrMsgBadRequest)
+		return
+	}
+	for _, role := range req.Roles {
+		if !h.dir.IsValidRole(role) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("roles contains invalid value: %s", role))
+			return
+		}
+	}
+
+	result, err := h.entity.CreateUser(r.Context(), body)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "entity CreateUser failed", "userID", user.UserID, "err", err)
+		mapUpstreamErrorGeneric(w, err, "Failed to create the user.")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result)
+}
+
+// ListSavedFilterViews handles GET /users/me/saved-filter-views.
+func (h *UsersHandler) ListSavedFilterViews(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserInfoFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, ErrMsgUnauthorized)
+		return
+	}
+
+	listKey := r.URL.Query().Get("listKey")
+	if listKey == "" {
+		writeError(w, http.StatusBadRequest, "listKey is required.")
+		return
+	}
+
+	result, err := h.entity.ListSavedFilterViews(r.Context(), listKey)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "entity ListSavedFilterViews failed", "userID", user.UserID, "err", err)
+		mapUpstreamErrorGeneric(w, err, "Failed to list saved filter views.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// SaveSavedFilterView handles PATCH /users/me/saved-filter-views.
+func (h *UsersHandler) SaveSavedFilterView(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserInfoFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, ErrMsgUnauthorized)
+		return
+	}
+
+	body, ok := readJSONBody(w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.entity.SaveSavedFilterView(r.Context(), body)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "entity SaveSavedFilterView failed", "userID", user.UserID, "err", err)
+		mapUpstreamErrorGeneric(w, err, "Failed to save the filter view.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// DeleteSavedFilterView handles DELETE /users/me/saved-filter-views.
+func (h *UsersHandler) DeleteSavedFilterView(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserInfoFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, ErrMsgUnauthorized)
+		return
+	}
+
+	q := r.URL.Query()
+	listKey := q.Get("listKey")
+	name := q.Get("name")
+	if listKey == "" || name == "" {
+		writeError(w, http.StatusBadRequest, "listKey and name are required.")
+		return
+	}
+
+	result, err := h.entity.DeleteSavedFilterView(r.Context(), listKey, name)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "entity DeleteSavedFilterView failed", "userID", user.UserID, "err", err)
+		mapUpstreamErrorGeneric(w, err, "Failed to delete the filter view.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ReorderSavedFilterView handles POST /users/me/saved-filter-views/reorder.
+func (h *UsersHandler) ReorderSavedFilterView(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserInfoFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, ErrMsgUnauthorized)
+		return
+	}
+
+	body, ok := readJSONBody(w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.entity.ReorderSavedFilterView(r.Context(), body)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "entity ReorderSavedFilterView failed", "userID", user.UserID, "err", err)
+		mapUpstreamErrorGeneric(w, err, "Failed to reorder saved filter views.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
