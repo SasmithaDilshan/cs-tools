@@ -93,7 +93,7 @@ func TestLoad_RejectsInvalidValues(t *testing.T) {
 
 func TestLoadEnv(t *testing.T) {
 	t.Setenv("PORT", "")
-	t.Setenv("ALERT_CORE_WAKE_URL", " http://core/alert ")
+	t.Setenv("ALERT_CORE_WAKE_URL", " http://core/alertz ")
 	t.Setenv("FALLBACK_CHAT_WEBHOOK_URLS", "https://a, ,https://b ")
 	e, err := LoadEnv()
 	if err != nil {
@@ -102,10 +102,31 @@ func TestLoadEnv(t *testing.T) {
 	if e.Port != "8080" {
 		t.Errorf("Port = %q, want 8080 default", e.Port)
 	}
-	if e.WakeURL != "http://core/alert" {
+	if e.WakeURL != "http://core/alertz" {
 		t.Errorf("WakeURL = %q", e.WakeURL)
 	}
 	if len(e.ChatWebhookURLs) != 2 || e.ChatWebhookURLs[0] != "https://a" || e.ChatWebhookURLs[1] != "https://b" {
 		t.Errorf("ChatWebhookURLs = %q", e.ChatWebhookURLs)
+	}
+}
+
+func TestParseWebhookAPIKeys(t *testing.T) {
+	keys, err := ParseWebhookAPIKeys(" aws:k1 ,datadog:k2, ")
+	if err != nil || len(keys) != 2 || keys["aws"] != "k1" || keys["datadog"] != "k2" {
+		t.Fatalf("keys = %v, err = %v", keys, err)
+	}
+	// Only the first colon splits, so a key may contain them.
+	if k, err := ParseWebhookAPIKeys("aws:a:b:c"); err != nil || k["aws"] != "a:b:c" {
+		t.Errorf("colon-containing key = %v, err = %v", k, err)
+	}
+	for name, raw := range map[string]string{
+		"no colon":     "aws",
+		"empty vendor": ":key",
+		"empty key":    "aws:",
+		"duplicate":    "aws:k1,aws:k2",
+	} {
+		if _, err := ParseWebhookAPIKeys(raw); err == nil {
+			t.Errorf("%s: %q should be rejected", name, raw)
+		}
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/gocql/gocql"
 
+	"alert-core-service/internal/auth"
 	"alert-core-service/internal/cassandra"
 	"alert-core-service/internal/config"
 	"alert-core-service/internal/csm"
@@ -78,6 +79,10 @@ func main() {
 		logger.Error("failed to initialise incident repository", "error", err)
 		os.Exit(1)
 	}
+	// Backfill version=0 on any pre-existing NULL row before anything mutates incidents_processed, or casUpdate's "IF version = 0" never matches.
+	if err := incidents.BackfillVersions(context.Background()); err != nil {
+		logger.Warn("failed to backfill incident versions, will retry on next restart", "error", err)
+	}
 	// Backfill pending index for pre-existing rows; startup continues if this fails as it will retry on next restart.
 	if err := incidents.BackfillPendingIndex(context.Background()); err != nil {
 		logger.Warn("failed to backfill pending incident index, will retry on next restart", "error", err)
@@ -96,13 +101,12 @@ func main() {
 		Scopes:       splitComma(os.Getenv("CSM_INTEGRATION_SCOPES")),
 	})
 	notifier := notify.New(base.With("component", "notify"), csmClient, notify.Config{
-		CallerID:             mustEnv(logger, "CSM_CALLER_ID"),
-		UnknownServiceID:     mustEnv(logger, "CSM_UNKNOWN_SERVICE_ID"),
-		ServiceCacheTTL:      depCfg.Notify.ServiceCacheTTL.Duration(),
-		MaxAttempts:          depCfg.Notify.MaxAttempts,
-		RetryBaseDelay:       depCfg.Notify.RetryBaseDelay.Duration(),
-		HTTPTimeout:          depCfg.Notify.HTTPTimeout.Duration(),
-		SendEnvironmentField: depCfg.Notify.SendEnvironmentField,
+		CallerID:         mustEnv(logger, "CSM_CALLER_ID"),
+		UnknownServiceID: mustEnv(logger, "CSM_UNKNOWN_SERVICE_ID"),
+		ServiceCacheTTL:  depCfg.Notify.ServiceCacheTTL.Duration(),
+		MaxAttempts:      depCfg.Notify.MaxAttempts,
+		RetryBaseDelay:   depCfg.Notify.RetryBaseDelay.Duration(),
+		HTTPTimeout:      depCfg.Notify.HTTPTimeout.Duration(),
 	})
 	eng := engine.New(base.With("component", "engine"), alerts, incidents, notifier, defaults, depCfg.Notify.MaxCSMAttempts, depCfg.Notify.StateCheckInterval.Duration(), depCfg.Engine.DedupWindow.Duration(), engine.CSMRetryConfig{
 		BaseDelay:  depCfg.Notify.CSMRetryBaseDelay.Duration(),
@@ -157,7 +161,12 @@ func main() {
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/alertz", h.ServeAlert)
+	// The endpoint is Public, so WAKE_API_KEY is its only protection.
+	wakeKey := os.Getenv("WAKE_API_KEY")
+	if wakeKey == "" {
+		logger.Warn("WAKE_API_KEY is empty: the wake endpoint is unauthenticated")
+	}
+	mux.Handle("/alertz", auth.RequireKey(wakeKey, base.With("component", "auth"), http.HandlerFunc(h.ServeAlert)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
