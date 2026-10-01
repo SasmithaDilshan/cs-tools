@@ -984,6 +984,7 @@ type OnboardingStep struct {
 	EventModifiedOn  time.Time            `json:"eventModifiedOn"`
 	CreatedOn        time.Time            `json:"createdOn"`
 	UpdatedOn        time.Time            `json:"updatedOn"`
+	RetryCount       int                  `json:"-"` // the delayed-retry job's re-runs only (its cap)
 }
 
 // UpsertOnboardingStepRequest is the body of
@@ -1077,6 +1078,7 @@ type SalesforceIngestState struct {
 	AttemptCount    int                    `json:"attemptCount"`
 	CreatedOn       time.Time              `json:"createdOn"`
 	UpdatedOn       time.Time              `json:"updatedOn"`
+	RetryCount      int                    `json:"-"` // the delayed-retry job's re-runs only (its cap)
 }
 
 // UpsertSalesforceIngestStateRequest is what an ingest writes to the ledger
@@ -4555,7 +4557,9 @@ type ChangeRequestApprover struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Status      string  `json:"status"`
+	CreatedOn   *string `json:"createdOn"`
 	RespondedOn *string `json:"respondedOn"`
+	Comments    *string `json:"comments"`
 }
 
 // ChangeRequestApproval represents a single approval stage (e.g. Assess, Authorize,
