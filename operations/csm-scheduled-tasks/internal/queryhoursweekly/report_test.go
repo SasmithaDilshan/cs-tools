@@ -19,6 +19,7 @@ package queryhoursweekly
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -126,28 +127,133 @@ func TestSendReport_EmptyReportIsStillSent(t *testing.T) {
 	}
 }
 
-// The audience is the configured one. The account manager and technical owner
-// entity-service reports must NOT leak into the recipients.
-func TestSendReport_AddressesFromConfigNotFromTheData(t *testing.T) {
+// The To line is the seed plus both owners of every EXCEEDED account, which
+// is what the ServiceNow action script builds. Cc stays configuration.
+func TestSendReport_AddressesAreDerivedFromTheData(t *testing.T) {
 	report := sampleReport()
 	report.Exceeded[0].AccountManagerEmail = "am@wso2.com"
 	report.Exceeded[0].TechnicalOwnerEmail = "to@wso2.com"
 
 	reports, email := &fakeReports{report: report}, &fakeEmail{}
-	err := SendReport(reports, email, []string{"configured@wso2.com"}, []string{"cc@wso2.com"}, "", true)(context.Background())
+	err := SendReport(reports, email, []string{"seed@wso2.com"}, []string{"cc@wso2.com"}, "", true)(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(email.to) != 1 || email.to[0] != "configured@wso2.com" {
-		t.Fatalf("To must be exactly the configured list, got %v", email.to)
+	want := []string{"seed@wso2.com", "am@wso2.com", "to@wso2.com"}
+	if !reflect.DeepEqual(email.to, want) {
+		t.Fatalf("To: got %v, want %v", email.to, want)
 	}
-	for _, addr := range append(append([]string{}, email.to...), email.cc...) {
-		if addr == "am@wso2.com" || addr == "to@wso2.com" {
-			t.Fatalf("derived address %q leaked into the recipients", addr)
-		}
+	// Cc is NOT derived -- the script never pushes onto it.
+	if !reflect.DeepEqual(email.cc, []string{"cc@wso2.com"}) {
+		t.Fatalf("Cc must stay configuration, got %v", email.cc)
 	}
 	if email.subject != Subject {
 		t.Errorf("subject: got %q, want %q", email.subject, Subject)
+	}
+}
+
+// *** THE REGRESSION THIS GUARDS IS THE EXPENSIVE ONE. *** In the action
+// script both pushes sit inside `if (acc_data.is_exceeded)`; the
+// close-to-exceed branch appends HTML and nobody. Deriving from both tables
+// reads as a tidy symmetry and silently widens the weekly audience.
+func TestDeriveRecipients_GoingToExceedContributesNobody(t *testing.T) {
+	report := queryhoursreport.Report{
+		Exceeded: []queryhoursreport.Account{{
+			AccountManagerEmail: "exceeded-am@wso2.com",
+		}},
+		GoingToExceed: []queryhoursreport.Account{{
+			AccountManagerEmail: "close-am@wso2.com",
+			TechnicalOwnerEmail: "close-to@wso2.com",
+		}},
+	}
+
+	got := DeriveRecipients(report, []string{"seed@wso2.com"})
+	want := []string{"seed@wso2.com", "exceeded-am@wso2.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestDeriveRecipients(t *testing.T) {
+	tests := []struct {
+		name string
+		seed []string
+		accs []queryhoursreport.Account
+		want []string
+	}{
+		{
+			name: "seed alone when nothing is exceeded",
+			seed: []string{"seed@wso2.com"},
+			want: []string{"seed@wso2.com"},
+		},
+		{
+			name: "one account can contribute two addresses",
+			seed: []string{"seed@wso2.com"},
+			accs: []queryhoursreport.Account{{
+				AccountManagerEmail: "am@wso2.com",
+				TechnicalOwnerEmail: "tech@wso2.com",
+			}},
+			want: []string{"seed@wso2.com", "am@wso2.com", "tech@wso2.com"},
+		},
+		{
+			// `arrayUtil.unique` after `toLowerCase`: without the fold these
+			// are two recipients and the same person is mailed twice.
+			name: "duplicates are folded case-insensitively",
+			seed: []string{"seed@wso2.com"},
+			accs: []queryhoursreport.Account{
+				{AccountManagerEmail: "Shared@WSO2.com"},
+				{AccountManagerEmail: "shared@wso2.com", TechnicalOwnerEmail: "SHARED@wso2.com"},
+			},
+			want: []string{"seed@wso2.com", "shared@wso2.com"},
+		},
+		{
+			name: "non-wso2 addresses are dropped",
+			seed: []string{"seed@wso2.com"},
+			accs: []queryhoursreport.Account{{
+				AccountManagerEmail: "customer@example.com",
+				TechnicalOwnerEmail: "tech@wso2.com",
+			}},
+			want: []string{"seed@wso2.com", "tech@wso2.com"},
+		},
+		{
+			// An owner reference whose user row has no email arrives empty;
+			// ServiceNow drops it the same way, via the domain test.
+			name: "blank owner emails are skipped",
+			seed: []string{"seed@wso2.com"},
+			accs: []queryhoursreport.Account{{
+				AccountManagerEmail: "",
+				TechnicalOwnerEmail: "   ",
+			}},
+			want: []string{"seed@wso2.com"},
+		},
+		{
+			name: "seed is deduped against a derived address and keeps the head",
+			seed: []string{"seed@wso2.com"},
+			accs: []queryhoursreport.Account{{AccountManagerEmail: "seed@wso2.com"}},
+			want: []string{"seed@wso2.com"},
+		},
+		{
+			// The seed is operator-configured, so it is exempt from the
+			// domain test; derived addresses never are.
+			name: "a non-wso2 seed is kept",
+			seed: []string{"ops@partner.example"},
+			accs: []queryhoursreport.Account{{AccountManagerEmail: "am@wso2.com"}},
+			want: []string{"ops@partner.example", "am@wso2.com"},
+		},
+		{
+			name: "no seed derives from the data alone",
+			accs: []queryhoursreport.Account{{AccountManagerEmail: "am@wso2.com"}},
+			want: []string{"am@wso2.com"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DeriveRecipients(queryhoursreport.Report{Exceeded: tc.accs}, tc.seed)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

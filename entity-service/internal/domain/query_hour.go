@@ -308,14 +308,18 @@ type QueryHoursReportAccount struct {
 	Exceeded      bool `json:"exceeded"`
 	GoingToExceed bool `json:"goingToExceed"`
 	RowCount      int  `json:"rowCount"`
-	// AccountManagerEmail and TechnicalOwnerEmail are REPORTED, NOT USED for
-	// addressing. ServiceNow derived the report's To line from these (for
-	// exceeded accounts only, seeded with one hardcoded address). This port
-	// addresses the report from configuration instead — see the
-	// query_hours_weekly_report sub-cron — because the ServiceNow copy
-	// available for inspection provably is not the one sending production's
-	// mail, and guessing the rule wrong emails roughly fifty people. They are
-	// surfaced so the decision can be revisited without a schema change.
+	// AccountManagerEmail and TechnicalOwnerEmail ADDRESS THE REPORT. The
+	// query_hours_weekly_report sub-cron builds its To line from these, for
+	// EXCEEDED accounts only, appended to a configured seed —
+	// queryhoursweekly.DeriveRecipients is the rule, and it is the production
+	// action script's rule, read directly rather than inferred.
+	//
+	// They come from account.account_manager_id / technical_owner_id, which
+	// csm-sync-service mirrors from customer_account.u_owner /
+	// u_technical_owner. *** AN UNPOPULATED COLUMN HERE SILENTLY SHORTENS THE
+	// AUDIENCE *** rather than failing anything, so a report that addresses
+	// far fewer people than expected is a mirroring question before it is a
+	// rendering one.
 	AccountManagerEmail string `json:"accountManagerEmail,omitempty"`
 	TechnicalOwnerEmail string `json:"technicalOwnerEmail,omitempty"`
 }

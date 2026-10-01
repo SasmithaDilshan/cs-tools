@@ -85,7 +85,7 @@ the easiest mistake here:
 | `open_cases_report` | `0 8 * * *` | **The report's actual audience** | No report sent, and the query is skipped |
 | `allocation_status_update_reminder` | `0 0 * * 1` | Failure alerts only — its real audience comes from the data | Reminders still go out; nobody is told if it fails |
 | `query_hour_recompute` | `0 * * * *` | Failure alerts only | Recompute still runs; nobody is told if it fails |
-| `query_hours_weekly_report` | `30 18 * * 0` | **The report's actual audience** | No report sent, and the query is skipped |
+| `query_hours_weekly_report` | `30 18 * * 0` | **The To SEED** — exceeded accounts' owners are appended; Cc is final | No report sent, and the query is skipped |
 
 Both `query_hour_recompute` and `query_hours_weekly_report` call **internal-only** entity-service
 endpoints. Their OAuth2 client id must appear in entity-service's `AUTH_INTERNAL_CLIENT_IDS` or
@@ -168,8 +168,10 @@ bus at all — it is an HTTP read plus an email.
 - **`query_hours_weekly_report` is NOT yet a paired deactivation.** The ServiceNow flow it ports
   also *writes* `sf_opportunity.query_hour_state` and caches rendered HTML onto the account; only
   the read half is ported. Turning that flow off stops those writes too, and nothing has yet
-  established what still reads that column. Until it is settled, both systems send — so keep this
-  task's recipient list narrow.
+  established what still reads that column. Until it is settled, both systems send — and its To is
+  now DERIVED (exceeded accounts' owners, appended to the configured seed), so that is ~48 people
+  getting two reports a week. Keep it out of `SUB_CRON_RECIPIENTS`, or `ALERTS_ENABLED=false`,
+  until the write half is settled.
 - **The consume path has never been exercised end to end.** Every email sent during development
   went straight to the email service, bypassing the bus. Before cutover, publish to a throwaway
   topic and confirm the consumer reacts.

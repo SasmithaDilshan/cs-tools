@@ -149,9 +149,8 @@ type Account struct {
 	Exceeded      bool    `json:"exceeded"`
 	GoingToExceed bool    `json:"goingToExceed"`
 	RowCount      int     `json:"rowCount"`
-	// AccountManagerEmail and TechnicalOwnerEmail are reported by
-	// entity-service and deliberately NOT used to address this email — see
-	// SendReport's own doc comment.
+	// AccountManagerEmail and TechnicalOwnerEmail address the email, for
+	// EXCEEDED accounts only — see queryhoursweekly.DeriveRecipients.
 	AccountManagerEmail string `json:"accountManagerEmail"`
 	TechnicalOwnerEmail string `json:"technicalOwnerEmail"`
 }

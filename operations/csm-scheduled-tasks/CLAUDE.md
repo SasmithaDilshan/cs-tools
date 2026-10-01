@@ -194,14 +194,22 @@ had it arrive Monday first thing local time for years. `0 0 * * 1` would look li
 translation and would quietly move the mail 5½ hours later — and change its date stamp, which is a
 UTC date and is exactly why the Monday mail is headed with Sunday's.
 
-**Recipients come from `SUB_CRON_RECIPIENTS`, not from the data**, unlike
-`allocation_status_update_reminder`. ServiceNow derived the To line from each exceeded account's
-owners; entity-service reports those addresses but this task ignores them. The ServiceNow copy
-available for inspection provably is not what sends production's mail — its Send Email step carries
-two Cc addresses where the real message carries three, and its derivation caps around 33 recipients
-where the real message reaches about 48. Deriving an audience from an unverified rule would email
-roughly fifty people on a guess. An empty `to` skips the fetch entirely, like the other report
-tasks.
+**The To line is DERIVED from the data; Cc is configuration.** `SUB_CRON_RECIPIENTS`' `to` is the
+SEED, not the audience: `DeriveRecipients` appends the account manager and technical owner of every
+**exceeded** account, lower-cased, `@wso2.com` only, deduplicated, seed first. That is the
+production action script's rule, read directly on 2026-10-01. Accounts merely *going* to exceed
+contribute nobody — in the script both pushes sit inside `if (acc_data.is_exceeded)`, and deriving
+from both tables is the mistake that silently widens the audience every week.
+
+The addresses come from `account.account_manager_id` / `technical_owner_id`, mirrored by
+csm-sync-service from `customer_account.u_owner` / `u_technical_owner`. **An unpopulated column
+there shortens the audience instead of failing**, so a short To is a mirroring question first. The
+dev ServiceNow copy capped near 33 recipients against the real message's 48 and carried two Cc
+addresses against its three — the rule is now settled, the count is not, so check a real run against
+a real message before trusting it.
+
+An empty `to` still skips the fetch entirely, like the other report tasks, which is also the lever
+below.
 
 An **empty report is still sent**: "nothing is exhausted" is a real answer, and a week with no mail
 is indistinguishable from a week where the job broke.
@@ -211,7 +219,9 @@ widening its recipients. The flow it ports is not the read-only report it appear
 stamps `sf_opportunity.query_hour_state` on every ungrouped opportunity it renders and caches the
 rendered HTML onto the account. Only the read half is ported. Turning the ServiceNow flow off would
 stop those writes too, and nothing has yet established what still reads that column. Until that is
-settled both systems send, so keep this task's audience narrow.
+settled both systems send — and with a derived To that is ~48 people receiving two reports a week,
+not a handful. `ALERTS_ENABLED=false`, or leaving this task out of `SUB_CRON_RECIPIENTS` so `to` is
+empty, is how it stays off until then.
 
 Where the port **diverges deliberately** from the original, all recorded in
 the ServiceNow discovery pack — `43-query-hour-flows.js`, PASS 15 and 16, which lands with

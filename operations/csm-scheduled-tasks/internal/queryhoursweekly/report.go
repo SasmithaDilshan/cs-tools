@@ -27,6 +27,7 @@ package queryhoursweekly
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/notify"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/queryhoursreport"
@@ -48,21 +49,33 @@ type EmailSender interface {
 // SendReport returns the sub-cron handler: fetch the report, render it, send
 // it.
 //
-// *** RECIPIENTS COME FROM CONFIGURATION, NOT FROM THE DATA. ***
+// *** THE To LINE IS DERIVED FROM THE DATA; Cc IS CONFIGURATION. ***
 //
-// ServiceNow derived this email's To line: a hardcoded seed address, plus the
-// account manager and technical owner of every account in the EXCEEDED table
-// only (accounts merely going to exceed contributed nobody). That rule is
-// reproduced in the API response — entity-service reports both addresses per
-// account — but deliberately not acted on here, for a reason worth recording:
-// the ServiceNow copy available for inspection provably is not the one
-// sending production's mail. Its Send Email step carries two Cc addresses
-// where the real message carries three, and its derivation caps at roughly
-// thirty-three recipients where the real message reaches about forty-eight.
-// Something else is running. Deriving an audience from a rule we cannot
-// verify would email around fifty people on a guess, so this task uses its
-// own SUB_CRON_RECIPIENTS entry like every other report here, and the derived
-// addresses sit in the payload for whoever settles the question later.
+// `to` is the SEED, not the audience: DeriveRecipients appends the account
+// manager and technical owner of every EXCEEDED account to it. ServiceNow
+// does the same, opening with a literal one-address seed and pushing both
+// owners per exceeded account.
+//
+// This was static until 2026-10-01 and the reason it was is worth keeping,
+// because it is the reason to re-check the count rather than trust it: the
+// ServiceNow copy available for inspection in dev provably was not the one
+// sending production's mail — two Cc addresses against the real message's
+// three, and a derivation capping near thirty-three recipients where the
+// real message reaches about forty-eight. The production action script has
+// since been read directly and the rule below is that script's, so the rule
+// is no longer a guess. THE COUNT STILL IS. If a run addresses far fewer
+// than the live mail, suspect `account.account_manager_id` /
+// `technical_owner_id` population before suspecting this function — those
+// mirror `u_owner` / `u_technical_owner` through csm-sync-service, and an
+// unpopulated column silently shortens the audience instead of failing.
+//
+// *** WHILE THE SERVICENOW FLOW IS STILL ENABLED, BOTH SYSTEMS SEND. ***
+// It also writes sf_opportunity.query_hour_state, so it cannot simply be
+// turned off (see docs/choreo-deployment-config.md). Until that is settled a
+// derived To means ~48 people receive two reports a week, where a narrow one
+// meant a handful did. ALERTS_ENABLED=false, or an empty To for this task,
+// is the lever — and an empty To now skips the send for that reason as well
+// as the original one.
 //
 // emailsEnabled is ALERTS_ENABLED. As with the other report tasks, false
 // skips the fetch entirely rather than fetching and discarding — and so does
@@ -82,13 +95,86 @@ func SendReport(reports ReportFetcher, email EmailSender, to, cc []string, sales
 			return fmt.Errorf("queryhoursreport: fetch weekly report: %w", err)
 		}
 
+		// Derived AFTER the fetch, because the audience is a function of the
+		// report. A week with nothing exceeded addresses the seed alone, and
+		// still sends — see the note below on empty reports.
+		recipients := DeriveRecipients(report, to)
+
 		body := notify.RenderQueryHoursWeeklyReport(notify.QueryHoursWeeklyReportData{
 			Report:            report,
 			SalesforceBaseURL: salesforceBaseURL,
 		})
-		if err := email.SendEmail(ctx, to, cc, Subject, body); err != nil {
+		if err := email.SendEmail(ctx, recipients, cc, Subject, body); err != nil {
 			return fmt.Errorf("queryhoursreport: send report email: %w", err)
 		}
 		return nil
 	}
+}
+
+// wso2Domain is the address suffix ServiceNow filters the derived audience on.
+//
+// *** THE SERVICENOW TEST IS A SUBSTRING TEST, AND THIS ONE IS NOT. ***
+// The action script asks `ref_email.includes("@wso2.com")`, which also admits
+// an address like "someone@wso2.community". This uses a suffix test instead:
+// the only addresses it therefore drops are ones that are not WSO2 mailboxes,
+// and mailing a stranger is the worse failure. Recorded as a deliberate
+// divergence rather than left as a silent difference in behaviour.
+const wso2Domain = "@wso2.com"
+
+// DeriveRecipients builds the report's To line the way ServiceNow builds it:
+// the configured seed, then the account manager and technical owner of every
+// account in the EXCEEDED table.
+//
+// *** ACCOUNTS MERELY GOING TO EXCEED CONTRIBUTE NOBODY. *** In the action
+// script the two pushes sit inside `if (acc_data.is_exceeded)`, while the
+// close-to-exceed branch appends HTML only. Deriving from both tables is the
+// obvious mistake and would widen the audience every week.
+//
+// Both owners of one account are collected independently, so a single account
+// can contribute two addresses — or one, or none.
+//
+// Addresses are lower-cased before the domain test and before the duplicate
+// check, matching `ref_email.toLowerCase()` followed by `arrayUtil.unique`:
+// without the fold, "A@wso2.com" and "a@wso2.com" both survive as separate
+// recipients. Order is first appearance, so the seed stays at the head and a
+// run is reproducible.
+//
+// The seed is NOT hardcoded here. ServiceNow opens with a literal
+// `to_list = ["kalanad@wso2.com"]`; that address belongs in this task's
+// SUB_CRON_RECIPIENTS entry, where every other recipient in this component
+// lives, so it can be changed without a deploy.
+func DeriveRecipients(report queryhoursreport.Report, seed []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(seed)+2*len(report.Exceeded))
+
+	add := func(address string) {
+		address = strings.ToLower(strings.TrimSpace(address))
+		// An owner reference whose user record carries no email arrives as
+		// "" and fails the domain test, which is how ServiceNow drops it too
+		// — `"".includes("@wso2.com")` is false.
+		if !strings.HasSuffix(address, wso2Domain) || seen[address] {
+			return
+		}
+		seen[address] = true
+		out = append(out, address)
+	}
+
+	// The seed is exempt from the domain test: it is operator-configured, not
+	// derived from account data, and a deployment that wants a non-wso2.com
+	// address on this report is making that choice deliberately.
+	for _, address := range seed {
+		address = strings.ToLower(strings.TrimSpace(address))
+		if address == "" || seen[address] {
+			continue
+		}
+		seen[address] = true
+		out = append(out, address)
+	}
+
+	for _, account := range report.Exceeded {
+		add(account.AccountManagerEmail)
+		add(account.TechnicalOwnerEmail)
+	}
+
+	return out
 }
