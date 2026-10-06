@@ -136,9 +136,12 @@ func commentRowToDomain(row repository.CommentRow) domain.Comment {
 }
 
 // commentAuthorName is row.CreatedByName, except that the Novera agent, which
-// has no "user" row to resolve against, is named commentAgentDisplayName.
+// has no "user" row to resolve against, is named commentAgentDisplayName. The
+// agent is stored two ways: "agent" for a reply written here, and "Novera" for
+// one synced in from ServiceNow, whose sys_journal_field.sys_created_by it is.
 func commentAuthorName(row repository.CommentRow) string {
-	if row.CreatedByName == "" && strings.EqualFold(row.CreatedBy, commentCreatedByAgent) {
+	if row.CreatedByName == "" &&
+		(strings.EqualFold(row.CreatedBy, commentCreatedByAgent) || strings.EqualFold(row.CreatedBy, commentAgentDisplayName)) {
 		return commentAgentDisplayName
 	}
 	return row.CreatedByName
