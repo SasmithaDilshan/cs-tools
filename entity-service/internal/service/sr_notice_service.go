@@ -93,6 +93,9 @@ func (s *SRNoticeService) OnCreatedMirrored(ctx context.Context, caseID string, 
 }
 
 func (s *SRNoticeService) onCreated(ctx context.Context, caseID string, mirrorAck func(ctx context.Context, caseID, comment string)) {
+	// The SR has committed; finish its automation even if the request ends.
+	ctx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	// The flow runs as the system, not as whoever raised the SR (often a
 	// customer, who could not assign it).
 	ctx = repository.WithSystemIdentity(ctx)
@@ -148,6 +151,8 @@ func (s *SRNoticeService) onCreated(ctx context.Context, caseID string, mirrorAc
 // consumer requires one, and an event it rejects is retried into its
 // dead-letter topic for nothing.
 func (s *SRNoticeService) OnComment(ctx context.Context, caseID, commentID string, commentType domain.CommentType, content, authorEmail, authorName string, createdOn time.Time) {
+	ctx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	var t events.SRCommentType
 	switch commentType {
 	case domain.CommentTypeComment:
@@ -181,6 +186,8 @@ func (s *SRNoticeService) OnComment(ctx context.Context, caseID, commentID strin
 }
 
 func (s *SRNoticeService) publish(ctx context.Context, eventType events.Type, caseID string, payload any) {
+	ctx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	if s.publisher == nil {
 		return
 	}

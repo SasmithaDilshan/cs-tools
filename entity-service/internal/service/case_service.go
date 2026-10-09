@@ -1364,11 +1364,15 @@ func (s *caseService) createCaseCommentAs(ctx context.Context, req domain.Create
 	// SearchCaseComments re-fetch trick, since the create response never
 	// loses the author's identity here in the first place.
 	if s.publisher != nil {
-		if cv, err := s.GetCaseByID(ctx, req.CaseID); err != nil {
+		// The comment has committed; the re-read below must not be cancelled
+		// with the request (see detachedNotifyContext).
+		notifyCtx, cancelNotify := detachedNotifyContext(ctx)
+		defer cancelNotify()
+		if cv, err := s.GetCaseByID(notifyCtx, req.CaseID); err != nil {
 			slog.ErrorContext(ctx, "create comment: enrich case for case.comment_added publish failed", "caseId", req.CaseID)
 		} else {
-			cv.WatchList = s.filterActiveWatchListUsers(ctx, cv, cv.WatchList)
-			publishCommentAddedEvent(ctx, s.publisher, s.AccountDefaultWatcherEmails, s.ProjectOnboardingInfo, cv, req, c.ID, authorName, actorEmail, isSupportEngineerResponse)
+			cv.WatchList = s.filterActiveWatchListUsers(notifyCtx, cv, cv.WatchList)
+			publishCommentAddedEvent(notifyCtx, s.publisher, s.AccountDefaultWatcherEmails, s.ProjectOnboardingInfo, cv, req, c.ID, authorName, actorEmail, isSupportEngineerResponse)
 		}
 	}
 
@@ -1873,18 +1877,22 @@ func (s *caseService) UpdateCase(ctx context.Context, req domain.UpdateCaseReque
 	// notify about it, so a future data-source change doesn't silently stop
 	// notifications from firing. State/Severity are mutually exclusive on
 	// this request (fieldCount above), so at most one of these two fires.
+	// The update has committed; the reads below must not be cancelled with
+	// the request (see detachedNotifyContext).
+	notifyCtx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	if req.State != nil && before != nil && derefState(before.State) != *req.State {
 		if label, ok := caseStateDisplayLabel[*req.State]; ok {
-			before.WatchList = s.filterActiveWatchListUsers(ctx, *before, before.WatchList)
-			publishStatusChangedEvent(ctx, s.publisher, s.AccountDefaultWatcherEmails, req.ID, label, *before)
+			before.WatchList = s.filterActiveWatchListUsers(notifyCtx, *before, before.WatchList)
+			publishStatusChangedEvent(notifyCtx, s.publisher, s.AccountDefaultWatcherEmails, req.ID, label, *before)
 		}
 	}
 	if req.Severity != nil && c.Severity != nil && derefSeverity(oldSeverity) != *c.Severity {
-		if cv, err := s.GetCaseByID(ctx, req.ID); err != nil {
+		if cv, err := s.GetCaseByID(notifyCtx, req.ID); err != nil {
 			slog.ErrorContext(ctx, "update case: enrich case for case.severity_changed publish failed", "caseId", req.ID)
 		} else {
-			cv.WatchList = s.filterActiveWatchListUsers(ctx, cv, cv.WatchList)
-			publishSeverityChangedEvent(ctx, s.publisher, s.AccountDefaultWatcherEmails, req.ID, string(derefSeverity(oldSeverity)), string(*c.Severity), cv)
+			cv.WatchList = s.filterActiveWatchListUsers(notifyCtx, cv, cv.WatchList)
+			publishSeverityChangedEvent(notifyCtx, s.publisher, s.AccountDefaultWatcherEmails, req.ID, string(derefSeverity(oldSeverity)), string(*c.Severity), cv)
 			// Deliberately independent of s.publisher -- see
 			// reviseCaseSLAClocks' own doc comment (sn_case_service.go) for
 			// why revising SLA clocks must not depend on Event Hub being
@@ -2393,6 +2401,8 @@ func (s *caseService) updateCaseMarkFixIssued(ctx context.Context, req domain.Up
 // cv.ProjectDetails/cv.WatchList don't change based on the assignment
 // itself either way.
 func (s *caseService) publishCaseAssigned(ctx context.Context, caseID, assigneeName, assigneeEmail string) {
+	ctx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	if s.publisher == nil || assigneeEmail == "" {
 		return
 	}
@@ -2504,6 +2514,8 @@ func (s *caseService) acknowledgeCase(ctx context.Context, req domain.UpdateCase
 // than a second lookup -- unlike ServiceNow, this data source computed that
 // identity itself in the same round trip that performed the claim.
 func (s *caseService) publishCaseAcknowledged(ctx context.Context, caseID, acknowledgerName string) {
+	ctx, cancelNotify := detachedNotifyContext(ctx)
+	defer cancelNotify()
 	if s.publisher == nil {
 		return
 	}
