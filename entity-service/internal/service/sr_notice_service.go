@@ -78,6 +78,21 @@ func NewSRNoticeService(repo repository.SRNoticeRepository, publisher EventPubli
 // OnCreated runs the flow for a service request that was just created.
 // Called only for a case of type service_request.
 func (s *SRNoticeService) OnCreated(ctx context.Context, caseID string) {
+	s.onCreated(ctx, caseID, nil)
+}
+
+// OnCreatedMirrored is OnCreated for an SR that also exists in ServiceNow
+// (created ServiceNow-first under dual-write): mirrorAck is handed the
+// acknowledgement comment once it is written here, so ServiceNow's copy gets
+// it too. A nil mirrorAck behaves exactly like OnCreated.
+//
+// The assignment is not mirrored: ServiceNow's case update API takes no
+// assignment group, so its copy of the SR stays unassigned until it does.
+func (s *SRNoticeService) OnCreatedMirrored(ctx context.Context, caseID string, mirrorAck func(ctx context.Context, caseID, comment string)) {
+	s.onCreated(ctx, caseID, mirrorAck)
+}
+
+func (s *SRNoticeService) onCreated(ctx context.Context, caseID string, mirrorAck func(ctx context.Context, caseID, comment string)) {
 	// The flow runs as the system, not as whoever raised the SR (often a
 	// customer, who could not assign it).
 	ctx = repository.WithSystemIdentity(ctx)
@@ -118,6 +133,9 @@ func (s *SRNoticeService) OnCreated(ctx context.Context, caseID string) {
 		return
 	}
 	slog.InfoContext(ctx, "sr notices: service request assigned and acknowledged", "caseId", caseID, "number", sr.Number)
+	if mirrorAck != nil {
+		mirrorAck(ctx, caseID, srAcknowledgement)
+	}
 	s.publish(ctx, events.TypeSRAcknowledged, caseID, events.SRAcknowledgedPayload{
 		SRRef:     srRef(sr),
 		CommentID: commentID,
