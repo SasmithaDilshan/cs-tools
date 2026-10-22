@@ -54,6 +54,7 @@ import (
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/schedule"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/stalecases"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/teamschedule"
+	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/tryout"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/worklogreport"
 	"github.com/wso2-open-operations/cs-tools/operations/csm-scheduled-tasks/internal/worklogsreport"
 )
@@ -700,17 +701,25 @@ func main() {
 	}
 
 	// A tryout runs one named task's handler once, right now, outside its
-	// schedule and without touching the ledger, so the run is neither
-	// recorded as the period's success nor retried. It exists to see a
-	// report land -- which is why it refuses to run unless that task has
-	// debug recipients: a tryout is for checking, and checking must not
-	// reach the real audience. The process exits once the handler returns;
-	// the engine never ticks. In Choreo: add the task's "debug" list to
-	// SUB_CRON_RECIPIENTS, set TRYOUT_TASK, run the task once by hand, read
-	// the log and the debug inbox, then remove both.
-	if tryout := strings.TrimSpace(os.Getenv("TRYOUT_TASK")); tryout != "" {
-		runTryout(tasks, tryout, debugFor(recipientOverrides, tryout), alertsEnabled)
-		return
+	// schedule -- see internal/tryout. It is recorded in the ledger under
+	// its own name, so it happens once per TRYOUT_RUN_ID however many
+	// instances start while TRYOUT_TASK is set; every other start carries
+	// on with the normal tick below, so no other task stalls. A refused or
+	// failed tryout exits non-zero so the run shows as failed where it was
+	// started. In Choreo: add the task's "debug" list to
+	// SUB_CRON_RECIPIENTS, set TRYOUT_TASK (and a fresh TRYOUT_RUN_ID to
+	// repeat), run the task once by hand, read the log and the debug
+	// inbox, then remove them.
+	if name := strings.TrimSpace(os.Getenv("TRYOUT_TASK")); name != "" {
+		outcome, err := tryout.Run(context.Background(), ledgerClient, tasks, name, os.Getenv("TRYOUT_RUN_ID"),
+			debugFor(recipientOverrides, name), alertsEnabled, 2*driverInterval)
+		if err != nil {
+			slog.Error("tryout", "task", name, "err", err)
+			os.Exit(1)
+		}
+		if outcome == tryout.Ran {
+			return
+		}
 	}
 
 	eng := engine.New(tasks, ledgerClient, emailClient, driverInterval, alertRecipients, alertsEnabled)
@@ -854,48 +863,6 @@ func tasksWithDebugRecipients(overrides map[string]subCronRecipients) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// runTryout runs the task named name once and exits the process: 0 when the
-// handler returned nil, 1 when it failed or when the tryout was refused.
-// It is refused unless the task has debug recipients, since the only thing
-// a tryout must never do is send a real report to real people on
-// somebody's say-so; and it warns, rather than refuses, when
-// ALERTS_ENABLED is false, because every report task then succeeds without
-// sending anything, which is a confusing way to learn nothing.
-func runTryout(tasks []registry.Task, name string, debugRecipients []string, emailsEnabled bool) {
-	if len(debugRecipients) == 0 {
-		slog.Error("TRYOUT_TASK is set but the task has no \"debug\" list in SUB_CRON_RECIPIENTS; refusing: a tryout sends to the debug recipients only",
-			"task", name)
-		os.Exit(1)
-	}
-	var names []string
-	var task *registry.Task
-	for i := range tasks {
-		names = append(names, tasks[i].Name)
-		if tasks[i].Name == name {
-			task = &tasks[i]
-		}
-	}
-	if task == nil {
-		slog.Error("TRYOUT_TASK names no registered task", "task", name, "registered", names)
-		os.Exit(1)
-	}
-	if !emailsEnabled {
-		slog.Warn("tryout with ALERTS_ENABLED=false: report tasks send nothing in that mode, so expect no email", "task", name)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	slog.Warn("tryout: running the task once, outside its schedule and the ledger",
-		"task", name, "debugRecipients", len(debugRecipients))
-	start := time.Now()
-	if err := task.Handler(ctx); err != nil {
-		slog.Error("tryout failed", "task", name, "elapsed", time.Since(start).String(), "err", err)
-		os.Exit(1)
-	}
-	slog.Info("tryout complete", "task", name, "elapsed", time.Since(start).String())
 }
 
 // periodStart returns the scheduled firing time a run of expr made now belongs

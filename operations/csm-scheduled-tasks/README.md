@@ -95,15 +95,19 @@ audience sees it:
   in a notice at the top of the body and `[Test copy]` prefixed to the subject. Everything else is
   exactly what the audience would get, built from the deployment's real data. Other reports and
   every failure alert are unaffected.
-- `TRYOUT_TASK=<task name>` runs that one task's handler once, right now, and exits. The schedule
-  is ignored, the ledger is not touched (the run is neither recorded nor retried), and the engine
-  never ticks. It refuses to start unless that task has a `debug` list: a tryout is for checking,
-  and checking must never reach the real audience. The task names are the ones in the table above.
+- `TRYOUT_TASK=<task name>` runs that one task's handler once, right now, ignoring its schedule.
+  The tryout is recorded in the ledger under `tryout:<task>@<TRYOUT_RUN_ID>` (default run id `1`),
+  so it happens **once per run id** however many instances the platform starts and however often
+  the trigger fires: the first instance to claim it performs it and exits; every other start, and
+  every later tick, sees the claim and carries on with the normal tick, so no other task stalls. A
+  failed tryout is recorded and never retried. To run it again, set a new `TRYOUT_RUN_ID`. It
+  refuses unless the task has a `debug` list: a tryout is for checking, and checking must never
+  reach the real audience. The task names are the ones in the table above.
 
-The intended routine in Choreo: add the task's `debug` list, set `TRYOUT_TASK`, run the scheduled
-task once by hand, confirm the mail in the debug inbox, then remove both. Leaving a `debug` list in
-place silently keeps that report away from its audience, which is why startup names every report
-on trial in a warning.
+The intended routine in Choreo: add the task's `debug` list, set `TRYOUT_TASK` (and a fresh
+`TRYOUT_RUN_ID` if there was an earlier tryout), run the scheduled task once by hand, confirm the
+mail in the debug inbox, then remove them. Leaving a `debug` list in place silently keeps that
+report away from its audience, which is why startup names every report on trial in a warning.
 
 ### Alerting
 
@@ -233,7 +237,8 @@ treated as unset, except where noted. All example values are placeholders.
 | `CSM_PORTAL_WEB_BASE_URL` | No | empty | CSM portal base URL each issue key in a CS Worklogs report links to (`<base>/cases/<id>`), matching csm-notification-service. The reports go to engineers, so this is the CSM portal, not the customer one. Empty renders the keys as plain text. Must be https when set; an invalid value stops startup. | `https://csm.example.com` |
 | `ALERTS_ENABLED` | No | `true` | Global kill switch for all emails (failure alerts and report emails). When false, failures are still recorded and retried, and report tasks skip their work. | `false` |
 | `ALERT_RECIPIENTS` | No | empty | Comma-separated standing audience emailed on every failed attempt of every task. | `oncall@example.com` |
-| `TRYOUT_TASK` | No | empty | Runs the named task once, immediately, outside its schedule and the ledger, then exits. Refuses to start unless that task has a `debug` list in `SUB_CRON_RECIPIENTS`. See "Debug mail mode and tryouts". | `migration_case_report` |
+| `TRYOUT_TASK` | No | empty | Runs the named task once, immediately, outside its schedule. Recorded in the ledger under `tryout:<task>@<run id>`, so it happens once per `TRYOUT_RUN_ID` however many instances start; later starts carry on with the normal tick. Refuses unless that task has a `debug` list in `SUB_CRON_RECIPIENTS`. See "Debug mail mode and tryouts". | `migration_case_report` |
+| `TRYOUT_RUN_ID` | No | `1` | Names one tryout. Change it to run the tryout again. | `2026-10-22a` |
 | `SUB_CRON_RECIPIENTS` | No | empty | JSON object of per-task recipients keyed by task name: `{"<task>": {"to": [...], "cc": [...], "debug": [...]}}`. Extra failure-alert audience for most tasks; the actual report audience for `stale_cases_report` and `open_cases_report`. `debug`, on a report task, puts that one report in debug mail mode (see "Debug mail mode and tryouts"). | `{"stale_cases_report":{"to":["team@example.com"],"cc":[],"debug":["you@example.com"]}}` |
 | `SUB_CRON_SCHEDULES` | No | empty | JSON object overriding task schedules by name: `{"<task>": "<cron>"}`. Unlisted tasks keep their built-in default. An invalid cron expression stops startup. | `{"housekeeping_cleanup":"0 4 * * *"}` |
 | `DRIVER_INTERVAL` | No | `1h` | Expected invocation cadence; must match the platform trigger. Go duration syntax, must be positive. Used as the default retry backoff and to size the orphaned-claim safety margin. | `15m` |
