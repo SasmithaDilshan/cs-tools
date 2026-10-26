@@ -113,10 +113,20 @@ func migrationCaseLink(caseLinkBase string, row migrationreport.Row) string {
 	if text == "" {
 		text = row.Number
 	}
-	if caseLinkBase == "" || row.Number == "" {
+	// The UUID, and the engagement path. Two reasons the old link could
+	// not resolve: entity-service's GET /cases/{id} "only accepts the
+	// internal UUID" (case_repo.go says so where it fixes the same
+	// mistake for by-number lookups), so a case number 404s; and these
+	// rows are engagements, which the portal routes to /engagements/{id},
+	// not /cases/{id} -- see CsmCaseDetailPage's detailPath.
+	//
+	// caseLinkBase is therefore the portal ROOT now, not a base that
+	// already carries a path. Nothing depended on the old shape: it was
+	// unset in production, which renders the ids as plain text.
+	if caseLinkBase == "" || row.ID == "" {
 		return escapeHTML(text)
 	}
-	href := strings.TrimRight(caseLinkBase, "/") + "/" + url.PathEscape(row.Number)
+	href := strings.TrimRight(caseLinkBase, "/") + "/engagements/" + url.PathEscape(row.ID)
 	return fmt.Sprintf(`<a href="%s" target="_blank" style="color:#ff7300;">%s</a>`, escapeHTML(href), escapeHTML(text))
 }
 
